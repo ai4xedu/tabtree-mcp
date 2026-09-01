@@ -4,6 +4,10 @@
   "title": "TabTree",
   "description": "Turn conversations into mind maps and whiteboards — local files, no account, nothing uploaded.",
   "version": "1.1.0",
+  "repository": {
+    "url": "https://github.com/ai4xedu/tabtree-mcp",
+    "source": "github"
+  },
   "websiteUrl": "https://tabtree.app/",
   "packages": [
     {
