@@ -1,0 +1,5 @@
+node_modules/
+.DS_Store
+*.mcpb
+key.pem
+.mcpregistry_token

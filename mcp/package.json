@@ -1,0 +1,40 @@
+{
+  "name": "tabtree-mcp",
+  "version": "1.1.0",
+  "mcpName": "app.tabtree/tabtree",
+  "description": "Let Claude read your TabTree library and turn conversations into mind maps and whiteboards. Local files, no account, nothing uploaded.",
+  "type": "module",
+  "bin": {
+    "tabtree-mcp": "tabtree-mcp.mjs"
+  },
+  "files": [
+    "tabtree-mcp.mjs",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "modelcontextprotocol",
+    "mind-map",
+    "mindmap",
+    "whiteboard",
+    "claude",
+    "claude-desktop",
+    "brainstorming",
+    "diagram",
+    "outline",
+    "kanban",
+    "local-first",
+    "offline"
+  ],
+  "homepage": "https://tabtree.app/",
+  "bugs": {
+    "email": "info@ai4x.academy"
+  },
+  "author": "Ai4x <info@ai4x.academy> (https://tabtree.app/)",
+  "license": "SEE LICENSE IN LICENSE.md"
+}

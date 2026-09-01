@@ -1,0 +1,52 @@
+{
+  "manifest_version": "0.3",
+  "name": "tabtree",
+  "display_name": "TabTree",
+  "version": "1.1.0",
+  "description": "Read your TabTree library and turn conversations into mind maps and boards.",
+  "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"map this codebase\" or \"draw our database schema as a board\", and the result appears in your TabTree library. Ask it to \"add the risks to my Q3 plan\" and TabTree shows you the proposed changes on the open map, one by one, for you to accept or drop.\n\nThe connector works on one folder: the backup folder you picked with the lifebuoy button on the My maps screen. It reads the maps in that folder and writes new ones next to them. It **only ever creates new files** — it cannot overwrite a map, cannot delete one, and never touches your browser storage. Nothing outside that folder is visible to it, and nothing is uploaded anywhere.\n\nChanges to an existing map are never written to it. They are filed as a proposal that TabTree turns into a banner on that map: you tick what you want, apply it, and Cmd+Z undoes the lot.\n\nNew maps land on disk as files. To pull them into the app, open My maps, click the 🛟 button and choose \"Bring maps back from this folder…\" — nothing is imported behind your back.\n\nPick the same folder TabTree shows next to its 🛟 button. If the connector points somewhere else, maps are created correctly and never appear in the app.",
+  "author": {
+    "name": "Ai4x",
+    "email": "info@ai4x.academy",
+    "url": "https://ai4x.academy/tabtree"
+  },
+  "homepage": "https://ai4x.academy/tabtree",
+  "documentation": "https://ai4x.academy/tabtree",
+  "support": "mailto:info@ai4x.academy",
+  "icon": "icon.png",
+  "keywords": ["mind map", "mindmap", "whiteboard", "tabtree", "diagram", "brainstorm", "outline"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/tabtree-mcp.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/tabtree-mcp.mjs"],
+      "env": {
+        "TABTREE_DIR": "${user_config.backup_folder}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "list_maps", "description": "Lists every mind map and board in the TabTree library." },
+    { "name": "read_map", "description": "Reads one map — a mind map as a markdown outline, a board as elements and connections." },
+    { "name": "search_maps", "description": "Searches map names, nodes, notes, shapes and sticky notes across the library." },
+    { "name": "create_mindmap", "description": "Creates a new mind map from a markdown outline." },
+    { "name": "create_board", "description": "Creates a new whiteboard with shapes and anchored arrows." },
+    { "name": "propose_changes", "description": "Proposes changes to an existing map — TabTree shows them for approval, nothing is written to the map." }
+  ],
+  "user_config": {
+    "backup_folder": {
+      "type": "directory",
+      "title": "TabTree backup folder",
+      "description": "The folder you chose with the 🛟 button on the My maps screen. Claude reads and writes maps here, and sees nothing outside it.",
+      "required": true,
+      "multiple": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
