@@ -49,11 +49,18 @@ Let Claude read your TabTree library and turn a conversation, a transcript or a
 spec into a real map on your disk. **Local files, no account, nothing uploaded** —
 the connector only ever sees the backup folder you point it at.
 
+**Claude Desktop — double-click, nothing to install.** Download
+[`TabTree-Connector.mcpb`](https://github.com/ai4xedu/tabtree-mcp/releases/latest) and double-click it. Claude
+Desktop ships its own Node, so there is nothing else to install, and it asks you for
+your backup folder in a normal folder picker.
+
+**Claude Code, or any MCP client — one line:**
+
 ```bash
 npx -y tabtree-mcp
 ```
 
-Or add it to Claude Desktop / Claude Code:
+Or in your client's config:
 
 ```json
 {
