@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "tabtree",
+  "owner": {
+    "name": "TabTree",
+    "email": "info@tabtree.app"
+  },
+  "description": "Workshop skills and the local connector for TabTree — mind maps and whiteboards in a single offline HTML file.",
+  "plugins": [
+    {
+      "name": "tabtree",
+      "displayName": "TabTree",
+      "source": "./plugins/tabtree",
+      "description": "Run a work-mapping interview or a vision/OKR workshop, then write the result as a real TabTree map on your own disk. Local files, no account, nothing uploaded.",
+      "author": {
+        "name": "TabTree",
+        "email": "info@tabtree.app"
+      },
+      "homepage": "https://tabtree.app",
+      "repository": "https://github.com/ai4xedu/tabtree-mcp",
+      "keywords": [
+        "mindmap",
+        "whiteboard",
+        "kanban",
+        "workshop",
+        "okr",
+        "local-first"
+      ],
+      "category": "Design",
+      "tags": [
+        "mind-mapping",
+        "diagramming",
+        "facilitation",
+        "local-first"
+      ]
+    }
+  ]
+}

@@ -7,17 +7,22 @@ Let Claude read your TabTree library and build new maps for you.
 > "Draw our database schema as a board."
 > "Add the risks we just discussed to my Q3 plan."
 
-The map appears as a file in your backup folder. You pull it into TabTree from
-*My maps* → **🛟** → **"Bring maps back from this folder…"**.
+**You need TabTree itself.** This package is the bridge, not the app. It works
+with both editions of TabTree, and you pick the mode with ONE environment variable:
 
-The connector **only ever creates new files.** It cannot overwrite a map, cannot
-delete one, and never touches your browser storage. There is no account, no
-server, no upload: it runs on your machine and reads one folder you choose.
+| Edition | What Claude talks to | Set |
+| --- | --- | --- |
+| **TabTree** (subscription — your maps live in your account) | your account, through TabTree's API | `TABTREE_API_KEY` — the key from ⚙️ Settings → Account → **Claude connector** |
+| **TabTree Classic** (the local file, bought once) | the 🛟 backup folder on your disk | `TABTREE_DIR` — that folder's path |
 
-**You need TabTree itself.** This package is the bridge, not the app: it reads
-and writes map files in one folder, and TabTree is what opens them. TabTree is a
-single local HTML file you buy once and keep for life — no subscription, no
-account, works offline. See [tabtree.app](https://tabtree.app/).
+In account mode a new map appears in TabTree within a minute, on every device you
+are signed in on. In Classic mode it appears as a file in your backup folder, and
+you pull it in from *My maps* → **🛟** → **"Bring maps back from this folder…"**.
+
+In both modes the connector **only ever creates new maps.** It cannot overwrite a
+map, cannot delete one, and never touches your browser storage. With a folder,
+nothing is uploaded anywhere; with an account, it talks only to TabTree's own
+API for that account.
 
 Changes to a map you already have are no exception. Claude never writes to it:
 it files a **proposal**, TabTree shows it as a banner on that map, and you tick
@@ -27,9 +32,16 @@ the changes you want. ⌘Z undoes them afterwards, like anything else you do.
 
 ## Before you start
 
-**1. TabTree needs a backup folder.** Open TabTree → *My maps* → 🛟 and pick a
-folder. That folder is what the connector reads and writes. If you have never
-set one up, do that first — the connector has nothing to talk to otherwise.
+**1. Get your key, or your folder.** TabTree (subscription): open the app →
+⚙️ Settings → Account → **Claude connector** → *Create a connector key*. It is
+shown once — copy it. TabTree Classic: open TabTree → *My maps* → 🛟 and pick a
+folder; that folder is what the connector reads and writes.
+
+Quickest test, account mode:
+
+```bash
+TABTREE_API_KEY=tt_live_… npx tabtree-mcp
+```
 
 **2. Node.js 18+ — for the npm and Claude Code routes.** Claude Desktop ships
 its own Node, so the `.mcpb` install below needs nothing. For the other routes,

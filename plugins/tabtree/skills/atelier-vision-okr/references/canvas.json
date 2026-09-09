@@ -1,0 +1,720 @@
+[
+ {
+  "id": "title",
+  "kind": "text",
+  "text": "Vision · Mission · OKRs — team workshop",
+  "x": 0,
+  "y": -104,
+  "w": 1100,
+  "h": 40,
+  "size": 30
+ },
+ {
+  "id": "subtitle",
+  "kind": "text",
+  "text": "One wall, one session: agree where the company is going, then land who moves what over the next 12 months.",
+  "x": 0,
+  "y": -56,
+  "w": 1240,
+  "h": 22,
+  "size": 15
+ },
+ {
+  "id": "z.vision",
+  "kind": "rect",
+  "text": "",
+  "x": 0,
+  "y": 0,
+  "w": 610,
+  "h": 310,
+  "color": "#fef3c7"
+ },
+ {
+  "id": "ic.vision",
+  "kind": "text",
+  "text": "🔭",
+  "x": 20,
+  "y": 12,
+  "w": 64,
+  "h": 52,
+  "size": 40
+ },
+ {
+  "id": "h.vision",
+  "kind": "text",
+  "text": "① VISION — 15 min",
+  "x": 92,
+  "y": 24,
+  "w": 420,
+  "h": 28,
+  "size": 21
+ },
+ {
+  "id": "q.vision",
+  "kind": "rect",
+  "text": "In 3 years, what is true about us that is not today? One bold sentence — if it does not excite you, it will not carry a year.",
+  "x": 20,
+  "y": 76,
+  "w": 570,
+  "h": 64,
+  "color": "#ffffff"
+ },
+ {
+  "id": "vision.draftA",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Write solo first — one draft per founder, 3 minutes.",
+  "x": 20,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#fde68a"
+ },
+ {
+  "id": "vision.draftB",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Read aloud. Circle the words that come back.",
+  "x": 215,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#fde68a"
+ },
+ {
+  "id": "vision.win",
+  "slot": true,
+  "kind": "sticky",
+  "text": "⭐ The winning sentence goes here.",
+  "x": 410,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#fff59d"
+ },
+ {
+  "id": "z.mission",
+  "kind": "rect",
+  "text": "",
+  "x": 630,
+  "y": 0,
+  "w": 610,
+  "h": 310,
+  "color": "#dbeafe"
+ },
+ {
+  "id": "ic.mission",
+  "kind": "text",
+  "text": "🧭",
+  "x": 650,
+  "y": 12,
+  "w": 64,
+  "h": 52,
+  "size": 40
+ },
+ {
+  "id": "h.mission",
+  "kind": "text",
+  "text": "② MISSION — 10 min",
+  "x": 722,
+  "y": 24,
+  "w": 420,
+  "h": 28,
+  "size": 21
+ },
+ {
+  "id": "q.mission",
+  "kind": "rect",
+  "text": "What you do every day, for whom, and why you are hard to replace. Present tense: the vision is the destination, this is the vehicle.",
+  "x": 650,
+  "y": 76,
+  "w": 570,
+  "h": 64,
+  "color": "#ffffff"
+ },
+ {
+  "id": "mission.who",
+  "slot": true,
+  "kind": "sticky",
+  "text": "We exist for… — the customer, named in their words.",
+  "x": 650,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#bfdbfe"
+ },
+ {
+  "id": "mission.what",
+  "slot": true,
+  "kind": "sticky",
+  "text": "We deliver… — the thing they actually pay for.",
+  "x": 845,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#bfdbfe"
+ },
+ {
+  "id": "mission.edge",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Unlike everyone else, we… — the edge.",
+  "x": 1040,
+  "y": 156,
+  "w": 180,
+  "h": 134,
+  "color": "#bfdbfe"
+ },
+ {
+  "id": "z.howto",
+  "kind": "rect",
+  "text": "",
+  "x": 1260,
+  "y": 0,
+  "w": 280,
+  "h": 310,
+  "color": "#e2e8f0"
+ },
+ {
+  "id": "ic.howto",
+  "kind": "text",
+  "text": "🧑‍🏫",
+  "x": 1278,
+  "y": 12,
+  "w": 64,
+  "h": 52,
+  "size": 36
+ },
+ {
+  "id": "h.howto",
+  "kind": "text",
+  "text": "How to run it",
+  "x": 1344,
+  "y": 24,
+  "w": 180,
+  "h": 26,
+  "size": 19
+ },
+ {
+  "id": "howto.agenda",
+  "kind": "rect",
+  "text": "① Vision 15' ② Mission 10' ③ Pillars 15' ④ OKRs 35' ⑤ Year plan 15'",
+  "x": 1278,
+  "y": 76,
+  "w": 244,
+  "h": 104,
+  "color": "#ffffff"
+ },
+ {
+  "id": "howto.rules",
+  "kind": "rect",
+  "text": "Write solo, then debate. Timebox hard — decide, do not wordsmith. Side-quests go to the parking lot.",
+  "x": 1278,
+  "y": 192,
+  "w": 244,
+  "h": 100,
+  "color": "#ffffff"
+ },
+ {
+  "id": "z.pillars",
+  "kind": "rect",
+  "text": "",
+  "x": 0,
+  "y": 330,
+  "w": 1240,
+  "h": 230,
+  "color": "#dcfce7"
+ },
+ {
+  "id": "ic.pillars",
+  "kind": "text",
+  "text": "⛰️",
+  "x": 20,
+  "y": 342,
+  "w": 64,
+  "h": 52,
+  "size": 40
+ },
+ {
+  "id": "h.pillars",
+  "kind": "text",
+  "text": "③ STRATEGIC PILLARS — the 3 bets of the year — 15 min",
+  "x": 92,
+  "y": 354,
+  "w": 820,
+  "h": 28,
+  "size": 21
+ },
+ {
+  "id": "q.pillars",
+  "kind": "rect",
+  "text": "Three bets maximum: if everything is strategic, nothing is. A pillar serves the vision and names the departments it will pull.",
+  "x": 20,
+  "y": 406,
+  "w": 1200,
+  "h": 54,
+  "color": "#ffffff"
+ },
+ {
+  "id": "pillar.1",
+  "slot": true,
+  "kind": "rect",
+  "text": "PILLAR 1 — the bet, in one line",
+  "x": 20,
+  "y": 476,
+  "w": 390,
+  "h": 66,
+  "color": "#bbf7d0"
+ },
+ {
+  "id": "pillar.2",
+  "slot": true,
+  "kind": "rect",
+  "text": "PILLAR 2 — and the number that proves it moved",
+  "x": 425,
+  "y": 476,
+  "w": 390,
+  "h": 66,
+  "color": "#bbf7d0"
+ },
+ {
+  "id": "pillar.3",
+  "slot": true,
+  "kind": "rect",
+  "text": "PILLAR 3 — and what you will say NO to this year",
+  "x": 830,
+  "y": 476,
+  "w": 390,
+  "h": 66,
+  "color": "#bbf7d0"
+ },
+ {
+  "id": "z.parking",
+  "kind": "rect",
+  "text": "",
+  "x": 1260,
+  "y": 330,
+  "w": 280,
+  "h": 230,
+  "color": "#fce7f3"
+ },
+ {
+  "id": "ic.parking",
+  "kind": "text",
+  "text": "🅿️",
+  "x": 1278,
+  "y": 342,
+  "w": 64,
+  "h": 52,
+  "size": 36
+ },
+ {
+  "id": "h.parking",
+  "kind": "text",
+  "text": "Parking lot",
+  "x": 1344,
+  "y": 354,
+  "w": 180,
+  "h": 26,
+  "size": 19
+ },
+ {
+  "id": "parking.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Good idea, wrong moment → it lands here, not in the debate.",
+  "x": 1278,
+  "y": 406,
+  "w": 244,
+  "h": 134,
+  "color": "#fbcfe8"
+ },
+ {
+  "id": "z.okr",
+  "kind": "rect",
+  "text": "",
+  "x": 0,
+  "y": 580,
+  "w": 1540,
+  "h": 500,
+  "color": "#e0e7ff"
+ },
+ {
+  "id": "ic.okr",
+  "kind": "text",
+  "text": "🏢",
+  "x": 20,
+  "y": 592,
+  "w": 64,
+  "h": 52,
+  "size": 40
+ },
+ {
+  "id": "h.okr",
+  "kind": "text",
+  "text": "④ OKRs BY DEPARTMENT — 35 min",
+  "x": 92,
+  "y": 604,
+  "w": 700,
+  "h": 28,
+  "size": 21
+ },
+ {
+  "id": "hint.okr",
+  "kind": "text",
+  "text": "Rename the four columns to your own departments — double-click a title to edit it.",
+  "x": 92,
+  "y": 636,
+  "w": 800,
+  "h": 20,
+  "size": 13
+ },
+ {
+  "id": "q.okr",
+  "kind": "rect",
+  "text": "One objective per department — qualitative, ambitious, one line. Then 2–3 key results: a number that moves, from X to Y, with an owner.",
+  "x": 20,
+  "y": 664,
+  "w": 1500,
+  "h": 52,
+  "color": "#ffffff"
+ },
+ {
+  "id": "dept.1",
+  "slot": true,
+  "kind": "rect",
+  "text": "🧲 SALES & GROWTH",
+  "x": 20,
+  "y": 730,
+  "w": 360,
+  "h": 46,
+  "color": "#c7d2fe"
+ },
+ {
+  "id": "dept.2",
+  "slot": true,
+  "kind": "rect",
+  "text": "🛠️ PRODUCT & DELIVERY",
+  "x": 400,
+  "y": 730,
+  "w": 360,
+  "h": 46,
+  "color": "#c7d2fe"
+ },
+ {
+  "id": "dept.3",
+  "slot": true,
+  "kind": "rect",
+  "text": "📣 MARKETING & BRAND",
+  "x": 780,
+  "y": 730,
+  "w": 360,
+  "h": 46,
+  "color": "#c7d2fe"
+ },
+ {
+  "id": "dept.4",
+  "slot": true,
+  "kind": "rect",
+  "text": "⚙️ OPS & FINANCE",
+  "x": 1160,
+  "y": 730,
+  "w": 360,
+  "h": 46,
+  "color": "#c7d2fe"
+ },
+ {
+  "id": "obj.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "🎯 Objective — where must this team land by December? One line, slightly scary.",
+  "x": 20,
+  "y": 788,
+  "w": 360,
+  "h": 84,
+  "color": "#fde68a"
+ },
+ {
+  "id": "obj.2",
+  "slot": true,
+  "kind": "sticky",
+  "text": "🎯 Objective — where must this team land by December? One line, slightly scary.",
+  "x": 400,
+  "y": 788,
+  "w": 360,
+  "h": 84,
+  "color": "#fde68a"
+ },
+ {
+  "id": "obj.3",
+  "slot": true,
+  "kind": "sticky",
+  "text": "🎯 Objective — where must this team land by December? One line, slightly scary.",
+  "x": 780,
+  "y": 788,
+  "w": 360,
+  "h": 84,
+  "color": "#fde68a"
+ },
+ {
+  "id": "obj.4",
+  "slot": true,
+  "kind": "sticky",
+  "text": "🎯 Objective — where must this team land by December? One line, slightly scary.",
+  "x": 1160,
+  "y": 788,
+  "w": 360,
+  "h": 84,
+  "color": "#fde68a"
+ },
+ {
+  "id": "kr.1.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "e.g. Signed revenue — X to 2X by December.",
+  "x": 20,
+  "y": 884,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.1.2",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 2 — from X to Y, by when. One owner.",
+  "x": 20,
+  "y": 948,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.1.3",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 3 — the guardrail: what must NOT drop.",
+  "x": 20,
+  "y": 1012,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.2.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 1 — from X to Y, by when. One owner.",
+  "x": 400,
+  "y": 884,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.2.2",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 2 — from X to Y, by when. One owner.",
+  "x": 400,
+  "y": 948,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.2.3",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 3 — the guardrail: what must NOT drop.",
+  "x": 400,
+  "y": 1012,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.3.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 1 — from X to Y, by when. One owner.",
+  "x": 780,
+  "y": 884,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.3.2",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 2 — from X to Y, by when. One owner.",
+  "x": 780,
+  "y": 948,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.3.3",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 3 — the guardrail: what must NOT drop.",
+  "x": 780,
+  "y": 1012,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.4.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 1 — from X to Y, by when. One owner.",
+  "x": 1160,
+  "y": 884,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.4.2",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 2 — from X to Y, by when. One owner.",
+  "x": 1160,
+  "y": 948,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "kr.4.3",
+  "slot": true,
+  "kind": "sticky",
+  "text": "KR 3 — the guardrail: what must NOT drop.",
+  "x": 1160,
+  "y": 1012,
+  "w": 360,
+  "h": 56
+ },
+ {
+  "id": "z.year",
+  "kind": "rect",
+  "text": "",
+  "x": 0,
+  "y": 1100,
+  "w": 1540,
+  "h": 290,
+  "color": "#ffedd5"
+ },
+ {
+  "id": "ic.year",
+  "kind": "text",
+  "text": "🗓️",
+  "x": 20,
+  "y": 1112,
+  "w": 64,
+  "h": 52,
+  "size": 40
+ },
+ {
+  "id": "h.year",
+  "kind": "text",
+  "text": "⑤ THE YEAR ON ONE WALL — 15 min",
+  "x": 92,
+  "y": 1124,
+  "w": 700,
+  "h": 28,
+  "size": 21
+ },
+ {
+  "id": "q.year",
+  "kind": "rect",
+  "text": "Every key result becomes at least one initiative with a name on it. No owner, no line. Review this wall monthly — move, don't rewrite.",
+  "x": 20,
+  "y": 1176,
+  "w": 1500,
+  "h": 52,
+  "color": "#ffffff"
+ },
+ {
+  "id": "q1.head",
+  "kind": "rect",
+  "text": "Q1 — Jan · Feb · Mar",
+  "x": 20,
+  "y": 1242,
+  "w": 360,
+  "h": 42,
+  "color": "#fed7aa"
+ },
+ {
+  "id": "q2.head",
+  "kind": "rect",
+  "text": "Q2 — Apr · May · Jun",
+  "x": 400,
+  "y": 1242,
+  "w": 360,
+  "h": 42,
+  "color": "#fed7aa"
+ },
+ {
+  "id": "q3.head",
+  "kind": "rect",
+  "text": "Q3 — Jul · Aug · Sep",
+  "x": 780,
+  "y": 1242,
+  "w": 360,
+  "h": 42,
+  "color": "#fed7aa"
+ },
+ {
+  "id": "q4.head",
+  "kind": "rect",
+  "text": "Q4 — Oct · Nov · Dec",
+  "x": 1160,
+  "y": 1242,
+  "w": 360,
+  "h": 42,
+  "color": "#fed7aa"
+ },
+ {
+  "id": "q1.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Initiative — owner — what 'done' looks like.",
+  "x": 20,
+  "y": 1296,
+  "w": 360,
+  "h": 80
+ },
+ {
+  "id": "q2.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Initiative — owner — what 'done' looks like.",
+  "x": 400,
+  "y": 1296,
+  "w": 360,
+  "h": 80
+ },
+ {
+  "id": "q3.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Initiative — owner — what 'done' looks like.",
+  "x": 780,
+  "y": 1296,
+  "w": 360,
+  "h": 80
+ },
+ {
+  "id": "q4.1",
+  "slot": true,
+  "kind": "sticky",
+  "text": "Initiative — owner — what 'done' looks like.",
+  "x": 1160,
+  "y": 1296,
+  "w": 360,
+  "h": 80
+ },
+ {
+  "id": "footer",
+  "kind": "text",
+  "text": "Done? ▶ Present it back to the room, 📣 export the image for the team — then rebuild Q1 as a kanban map to run it week by week.",
+  "x": 0,
+  "y": 1412,
+  "w": 1540,
+  "h": 24,
+  "size": 14
+ }
+]

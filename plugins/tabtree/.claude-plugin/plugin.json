@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "tabtree",
+  "displayName": "TabTree",
+  "version": "1.2.0",
+  "description": "Two facilitation skills that end in a real TabTree document — a work map of where AI gives time back, and a vision/mission/OKR canvas — plus the local connector that writes them to your own disk.",
+  "author": {
+    "name": "TabTree",
+    "email": "info@tabtree.app",
+    "url": "https://tabtree.app"
+  },
+  "homepage": "https://tabtree.app",
+  "repository": "https://github.com/ai4xedu/tabtree-mcp",
+  "license": "SEE LICENSE IN plugins/tabtree/LICENSE.md",
+  "keywords": [
+    "mindmap",
+    "whiteboard",
+    "workshop",
+    "okr",
+    "local-first"
+  ],
+  "mcpServers": {
+    "tabtree": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tabtree-mcp"
+      ],
+      "env": {
+        "TABTREE_DIR": "${TABTREE_DIR}"
+      }
+    }
+  }
+}

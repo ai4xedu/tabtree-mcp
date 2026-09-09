@@ -22,6 +22,27 @@ import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSy
 import { join, basename } from "node:path";
 
 const DIR = process.env.TABTREE_DIR || process.env.YGMIND_DIR || "";
+// ---------------------------------------------------------------------------
+// DEUX SOURCES, UN CONNECTEUR (2026-09-08). Le dossier 🛟 sert TabTree Classic (le fichier
+// local) ; le CLOUD sert l'abonné TabTree SaaS. La source est choisie par la présence d'une
+// clé personnelle `TABTREE_API_KEY` (fabriquée dans ⚙️ Account → Claude connector) : les six
+// outils ne changent pas d'un mot de contrat, seule la tuyauterie de lecture/écriture change.
+// `TABTREE_API_URL` n'est là que pour une préversion — la valeur par défaut est la production.
+// ---------------------------------------------------------------------------
+const API_KEY = String(process.env.TABTREE_API_KEY || "").trim();
+const API_URL = String(process.env.TABTREE_API_URL || "https://aynmiptyvisxoslzkzxn.supabase.co/functions/v1/mcp").trim();
+const CLOUD = !!API_KEY;
+async function cloudCall(action, body){
+  let r;
+  try{
+    r = await fetch(API_URL, { method:"POST",
+      headers:{ "content-type":"application/json", "x-tabtree-key": API_KEY },
+      body: JSON.stringify(Object.assign({ action }, body || {})) });
+  }catch(e){ throw new Error("Could not reach the TabTree cloud (" + (e && e.message || e) + ")."); }
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok || !j || j.ok === false) throw new Error((j && j.error) || ("The TabTree cloud answered HTTP " + r.status + "."));
+  return j;
+}
 const MANIFEST = "bibliotheque.json";
 // Boîte aux lettres des propositions. Le connecteur reste EN AJOUT SEUL : il ne modifie
 // jamais un .tabtree, il dépose ici un fichier que l'app lit, montre, et n'applique que si
@@ -33,7 +54,8 @@ const PROP_DIR = "Propositions";
 // Utilitaires
 // ---------------------------------------------------------------------------
 function dirOk(){
-  if(!DIR) throw new Error("TABTREE_DIR is not set. Point it at your TabTree backup folder — the one you picked with 🛟 on the My maps screen. (The older name YGMIND_DIR still works.)");
+  if(CLOUD) return;   // la source est le compte, pas un dossier
+  if(!DIR) throw new Error("The connector has no source. For TabTree (subscription), set TABTREE_API_KEY to the connector key from ⚙️ Settings → Account → Claude connector. For TabTree Classic (the local file), set TABTREE_DIR to your 🛟 backup folder. (The older name YGMIND_DIR still works.)");
   if(!existsSync(DIR)) throw new Error("The TABTREE_DIR folder does not exist: " + DIR);
 }
 // Même règle de nommage que l'app (bkSafeName) : la restauration retire le
@@ -116,7 +138,9 @@ const ART_IDS_MCP = [
   "laptop", "phone", "mail", "folder", "book", "chart",
   "money", "calendar", "building", "car", "globe", "rocket",
   "house", "pin", "plane", "coffee", "plant", "sun",
-  "camera", "music", "lock", "key", "health", "gift"
+  "camera", "music", "lock", "key", "health", "gift",
+  "manager", "client", "expert", "assistant", "coach", "learner",
+  "developer", "seller", "support", "speaker", "freelancer", "group"
 ];
 const ART = Object.fromEntries(ART_IDS_MCP.map(id=>[id, true]));
   const EMO_PIC_PAT = "\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\uFE0E)?)*";
@@ -267,7 +291,11 @@ function buildBoardDoc(name, elements, connections, style){
              a0: (e.kind==="arc" && Number.isFinite(+e.a0)) ? +e.a0 : null,
              a1: (e.kind==="arc" && Number.isFinite(+e.a1)) ? +e.a1 : null,
              ir: (e.kind==="arc" && Number.isFinite(+e.ir)) ? +e.ir : null,
-             size: (+e.size>=9 && +e.size<=72) ? Math.round(+e.size) : null };
+             size: (+e.size>=9 && +e.size<=72) ? Math.round(+e.size) : null,
+             // L'image sans octets sur un élément de board (2026-09-03) : même frontière que
+             // pour un nœud — un id inventé retombe sur « aucune image », jamais sur du balisage.
+             // Pas sur un secteur, un gradin ou un chevron : leur silhouette n'a pas de « haut ».
+             pic: (e.pic != null && !["arc","trap","chev"].includes(kind)) ? okPic(String(e.pic)) : "" };
   });
   const byId = new Map();
   for(const e of els){
@@ -332,10 +360,11 @@ function buildBoardDoc(name, elements, connections, style){
   for(const e of els){
     if(e.kind==="sticky"){
       refOf.set(e.lid, "st:" + stickies.length);
-      stickies.push({ text:e.text, x:e.x, y:e.y, w:e.w, h:e.h, color:e.color, size:e.size||undefined });
+      stickies.push({ text:e.text, x:e.x, y:e.y, w:e.w, h:e.h, color:e.color, size:e.size||undefined, pic:e.pic||undefined });
     } else {
       refOf.set(e.lid, "sh:" + shapes.length);
       shapes.push({ kind:e.kind, x:e.x, y:e.y, w:e.w, h:e.h, color:e.kind==="text" ? "#ffffff" : e.color, text:e.text, size:e.size||undefined,
+                    pic: e.pic||undefined,
                     tk: e.tk != null ? e.tk : undefined,
                     a0: e.a0 != null ? e.a0 : undefined,
                     a1: e.a1 != null ? e.a1 : undefined,
@@ -452,6 +481,36 @@ function scanLibrary(){
   out.sort((a,b)=>b.mtime.localeCompare(a.mtime));
   return out;
 }
+// La bibliothèque du COMPTE, présentée exactement comme celle du dossier : mêmes champs, donc
+// les six outils n'ont rien à savoir de la source. `file` porte la clé de la carte (map_key),
+// que `propose_changes` renvoie telle quelle — pas de suffixe « __id » à analyser ici.
+async function cloudLibrary(){
+  const j = await cloudCall("docs", {});
+  const folders = new Map((j.folders||[]).filter(f=>f && f.folder_key).map(f=>[f.folder_key, f]));
+  const pathOf = (k)=>{
+    const out = [], seen = new Set();
+    let f = folders.get(k);
+    while(f && !seen.has(f.folder_key) && out.length <= 16){ seen.add(f.folder_key); out.unshift(f.name); f = f.parent_key ? folders.get(f.parent_key) : null; }
+    return out.length ? out.join(" / ") : null;
+  };
+  const out = [];
+  for(const r of (j.maps||[])){
+    const doc = r && r.doc;
+    if(!doc || !doc.root) continue;
+    out.push({
+      file: r.map_key,
+      name: String(r.name || "") || String(doc.root.text || "").slice(0, 60) || r.map_key,
+      folder: pathOf(r.folder_key),
+      kind: doc.board ? "board" : "map",
+      nodes: countNodes(doc.root),
+      elements: doc.board ? ((doc.shapes||[]).length + (doc.stickies||[]).length + (doc.arrows||[]).length + (doc.draws||[]).length) : undefined,
+      mtime: String(r.updated_at || "").slice(0,16).replace("T"," "),
+      doc
+    });
+  }
+  return out;
+}
+async function loadLibrary(){ return CLOUD ? cloudLibrary() : scanLibrary(); }
 function collectTexts(doc){
   const texts = [];
   (function walk(n){ if(n.text) texts.push(n.text); if(n.note) texts.push(n.note); (n.children||[]).forEach(walk); })(doc.root);
@@ -486,9 +545,9 @@ function boardToText(doc){
   if((doc.draws||[]).length) lines.push(`Pencil strokes: ${doc.draws.length}`);
   return lines.join("\n");
 }
-function findMap(file){
+async function findMap(file){
   checkRelPath(file);
-  const all = scanLibrary();
+  const all = await loadLibrary();
   const hit = all.find(m=>m.file===file) || all.find(m=>m.file.endsWith(file)) || all.find(m=>m.name===file);
   if(!hit) throw new Error("No such map: " + file + ". Use list_maps to see what is available.");
   return hit;
@@ -497,7 +556,20 @@ function findMap(file){
 // ---------------------------------------------------------------------------
 // Écriture (toujours un NOUVEAU fichier — jamais de modification en place)
 // ---------------------------------------------------------------------------
-function writeDoc(name, doc, folder){
+async function writeDoc(name, doc, folder){
+  if(CLOUD){
+    // Le dossier est un NOM de dossier de bibliothèque : on le résout en clé s'il existe déjà,
+    // sinon la carte arrive à la racine et le texte de réponse le dit (« no silent caps »).
+    let folder_key = null;
+    if(folder){
+      const j = await cloudCall("list", {});
+      const hit = (j.folders||[]).find(f=>f && String(f.name||"").trim().toLowerCase() === String(folder).trim().toLowerCase());
+      if(hit) folder_key = hit.folder_key;
+    }
+    const kind = doc.board ? "board" : (doc.kanban ? "kanban" : "map");
+    const r = await cloudCall("create", { name: String(name||"").slice(0,200), kind, doc, folder_key });
+    return "cloud:" + r.map_key + (folder && !folder_key ? "  (folder “" + folder + "” does not exist in this account — the map is at the root)" : "");
+  }
   dirOk();
   let target = DIR;
   if(folder){
@@ -527,7 +599,7 @@ function countForest(roots){ return roots.reduce((n,r)=>n + countNodes(r), 0); }
 // connecteur la refuserait à l'écriture, ou l'app la jetterait à la lecture — dans les deux
 // cas Claude croirait avoir proposé quelque chose qui n'arrive jamais chez l'utilisateur.
 // C'est le défaut du losange, rejoué. Un test compare les deux listes en ensembles.
-const PROP_OPS = ["add","rename","note","check","delete","move","pic"];
+const PROP_OPS = ["add","rename","note","check","delete","move","pic","persona"];
 
 // Tout est vérifié ICI, contre la carte réelle, et un défaut fait ÉCHOUER l'appel. C'est
 // délibéré : une cible introuvable remonte à Claude, qui peut relire la carte et corriger,
@@ -541,6 +613,24 @@ function buildProposalOps(mapDoc, changes){
     const where = "change #" + (i+1);
     const op = String((c && c.op) || "").trim();
     if(!PROP_OPS.includes(op)) throw new Error(`${where}: unknown op "${op}". Use one of: ${PROP_OPS.join(", ")}.`);
+    if(op === "persona"){
+      // `persona` (2026-09-08) vise le DOCUMENT entier — la toile d'une work map — jamais un
+      // nœud : donc pas de `target`. C'est le relais skill → carte sans copier-coller : le skill
+      // « ma cartographie du travail » dépose ici l'objet de l'entretien, l'app propose de
+      // l'appliquer d'un clic. Contrôle SUPERFICIEL, et c'est une décision : `okPersona`, la
+      // frontière de confiance de l'app (soixante lignes de bornes), juge à l'application et
+      // nomme son refus dans le panneau. La dupliquer ici serait une seconde règle à figer
+      // caractère par caractère comme `okPic`. La raison qui fait valider les autres ops en
+      // profondeur — « une proposition à moitié valide arrive en lignes barrées » — ne
+      // s'applique pas : une op persona est ATOMIQUE, elle rebâtit la toile ou ne fait rien.
+      const P = c.persona;
+      if(!P || typeof P !== "object" || !Array.isArray(P.modules) || !P.modules.length)
+        throw new Error(`${where}: \`persona\` must be the interview object — { who, role, mission, tools, meetings, opener, modules:[{ name, procs:[{ name, h, after, freq, rep, data, stakes, lever, step, why }] }], trajectory, signs, parking }.`);
+      const n = P.modules.reduce((a, m)=>a + ((m && Array.isArray(m.procs)) ? m.procs.length : 0), 0);
+      if(n < 3) throw new Error(`${where}: the persona has ${n} process(es) — a work map needs at least three. Finish the interview first.`);
+      if(JSON.stringify(P).length > 60000) throw new Error(`${where}: the persona is too large (60000 characters max).`);
+      return { op, persona: P, procs: n };
+    }
     const target = String(c.target == null ? "" : c.target);
     const r = propFind(mapDoc.root, target);
     if(r.error === "empty")   throw new Error(`${where}: \`target\` is required — the node the change applies to.`);
@@ -595,17 +685,24 @@ function buildProposalOps(mapDoc, changes){
 }
 function parts_last(spec){ const p = String(spec||"").split(">"); return p[p.length-1].trim(); }
 
-function writeProposal(map, note, ops){
+async function writeProposal(map, note, ops){
+  const payload = (id)=>({
+    v: 1, kind: "tabtree-proposal", mapId: id, mapFile: CLOUD ? map.file : basename(map.file), mapName: map.name,
+    createdAt: Date.now(), by: "Claude", note: String(note||"").slice(0, 2000), ops
+  });
+  if(CLOUD){
+    // La boîte aux lettres cloud : la table `proposals`, que l'app relit au sondage suivant.
+    // Même charge utile que le fichier — c'est le même `parseProposal` qui la lit côté app.
+    const r = await cloudCall("propose", { map_key: map.file, payload: payload(map.file) });
+    return "cloud:" + (r.id || "proposal");
+  }
   dirOk();
   const target = join(DIR, PROP_DIR);
   if(!existsSync(target)) mkdirSync(target);
   const id = mapIdOf(map.file);
   if(!id) throw new Error("This map's file has no id suffix (“…__map123.tabtree”), so the app cannot match a proposal to it. Open it once in TabTree with the backup folder turned on, then try again.");
   const file = "prop_" + id + "__" + Date.now().toString(36) + ".json";
-  writeFileSync(join(target, file), JSON.stringify({
-    v: 1, kind: "tabtree-proposal", mapId: id, mapFile: basename(map.file), mapName: map.name,
-    createdAt: Date.now(), by: "Claude", note: String(note||"").slice(0, 2000), ops
-  }, null, 2), "utf8");
+  writeFileSync(join(target, file), JSON.stringify(payload(id), null, 2), "utf8");
   return PROP_DIR + "/" + file;
 }
 
@@ -619,6 +716,8 @@ function writeProposal(map, note, ops){
 // Tout répond « ✅ » et rien n'apparaît. Donner le nom du dossier rend l'écart
 // visible en une seconde, sans que personne ait à soupçonner quoi que ce soit.
 function importHint(){
+  if(CLOUD) return "Saved to the user's TabTree account. It appears in TabTree within a minute (the app polls "
+    + "its account while open), or on the next sign-in on any device. Nothing is overwritten.";
   return "Written to the folder “" + basename(DIR) + "”.\n"
     + "To see it in TabTree: My maps → 🛟 → “Bring maps back from this folder…”. "
     + "(Or press ⌘K and type “bring my maps back”.) Nothing is overwritten.\n"
@@ -674,6 +773,7 @@ const TOOLS = [
         x:{ type:"number" }, y:{ type:"number" }, w:{ type:"number" }, h:{ type:"number" },
         color:{ type:"string", description:"Hex fill colour (shapes) or sticky-note colour" },
         size:{ type:"number", description:"Text size 9-72 (defaults to 15)" },
+        pic:{ type:"string", description:"Optional picture drawn INSIDE the element, no file needed — \"a:<id>\" for a built-in illustration (roles: manager, client, expert, assistant, coach, learner, developer, seller, support, speaker, freelancer, group — plus person, team, idea, target, rocket…) or \"e:<emoji>\". Not on arc/trap/chev." },
         tk:{ type:"number", description:"trap only — small-side/large-side ratio, 0..0.95 (0 = triangle); NEGATIVE puts the narrow side at the bottom (funnel tier)" },
         a0:{ type:"number", description:"arc only — start angle in degrees, 0 at 12 o'clock, clockwise" },
         a1:{ type:"number", description:"arc only — end angle in degrees (a1 > a0; a full circle is a0=0, a1=360)" },
@@ -696,34 +796,35 @@ const TOOLS = [
   },
   {
     name: "propose_changes",
-    description: "Proposes changes to an EXISTING mind map: add branches, rename a node, write a note, tick a task, remove a branch, illustrate a node. Nothing is applied — the proposal appears in TabTree as a banner on that map, the user reviews it change by change and picks what to keep (and can undo with Cmd+Z afterwards). Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice. Read the map first so the wording matches.",
+    description: "Proposes changes to an EXISTING mind map: add branches, rename a node, write a note, tick a task, remove a branch, illustrate a node — or, with op \"persona\", re-cast a WORK MAP canvas from a finished interview (the JSON block of the « ma cartographie du travail » skill). Nothing is applied — the proposal appears in TabTree as a banner on that map, the user reviews it change by change and picks what to keep (and can undo with Cmd+Z afterwards). Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice. Read the map first so the wording matches.",
     inputSchema: { type:"object", properties:{
       file:{ type:"string", description:"The map to change — a file name (or map name) from list_maps" },
       note:{ type:"string", description:"One line telling the user what this proposal does and why. Shown above the changes." },
       changes:{ type:"array", description:"The proposed changes, applied in order", items:{ type:"object", properties:{
-        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic"], description:"add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it" },
-        target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\" if ambiguous" },
+        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","persona"], description:"add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) from an interview — no target" },
+        target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\" if ambiguous (not used by persona)" },
+        persona:{ type:"object", description:"persona: the interview object exactly as the skill returns it — who, role, mission, tools, meetings, opener, modules[{name, procs[{name,h,after,freq,rep,data,stakes,lever,step,why}]}], trajectory, signs, parking. TabTree rebuilds the canvas AND its companion sheet from it." },
         markdown:{ type:"string", description:"add: the new branch as a bullet list, 2 spaces per level" },
         text:{ type:"string", description:"rename: the new text" },
         note:{ type:"string", description:"note: the note body (empty string clears it)" },
         value:{ type:"boolean", description:"check: true to tick, false to untick" },
         col:{ type:"string", description:"move: the kanban column id (read_map shows them), or \"\" to take the card off the board" },
         pic:{ type:"string", description:"pic: \"a:<id>\" for a built-in illustration, or \"e:<emoji>\" for one large emoji, or \"\" to remove it. Ids: person, team, chat, idea, target, trophy, star, heart, warning, done, flag, clock, laptop, phone, mail, folder, book, chart, money, calendar, building, car, globe, rocket, house, pin, plane, coffee, plant, sun, camera, music, lock, key, health, gift." }
-      }, required:["op","target"], additionalProperties:false } }
+      }, required:["op"], additionalProperties:false } }
     }, required:["file","changes"], additionalProperties:false }
   }
 ];
 
 const HANDLERS = {
-  list_maps(){
-    const maps = scanLibrary();
-    if(!maps.length) return "The library is empty (or TABTREE_DIR points at the wrong folder: " + DIR + ").";
+  async list_maps(){
+    const maps = await loadLibrary();
+    if(!maps.length) return CLOUD ? "This TabTree account has no maps yet." : "The library is empty (or TABTREE_DIR points at the wrong folder: " + DIR + ").";
     return maps.map(m=>
       `• ${m.name}  [${m.kind}]${m.folder ? "  📁 " + m.folder : ""}\n  file: ${m.file}\n  ${m.kind==="board" ? m.elements + " elements" : m.nodes + " nodes"} · modified ${m.mtime}`
     ).join("\n");
   },
-  read_map(args){
-    const m = findMap(args.file);
+  async read_map(args){
+    const m = await findMap(args.file);
     const head = `${m.name} [${m.kind}] — file: ${m.file}\n`;
     if(m.kind === "board") return head + boardToText(m.doc);
     // Le rappel sur propose_changes vit ici et pas dans la description de l'outil : c'est au
@@ -731,11 +832,11 @@ const HANDLERS = {
     return head + nodeToMarkdown(m.doc.root, 0)
       + "\n\n(To change this map, use propose_changes with `file: \"" + m.file + "\"`. Name a node by the exact text above, or \"Ancestor > Node\" when it appears twice. Nothing is applied until the user approves it in TabTree.)";
   },
-  search_maps(args){
+  async search_maps(args){
     const q = String(args.query||"").toLowerCase();
     if(!q) throw new Error("`query` is empty.");
     const hits = [];
-    for(const m of scanLibrary()){
+    for(const m of await loadLibrary()){
       const found = [];
       if(m.name.toLowerCase().includes(q)) found.push("(map name)");
       for(const t of collectTexts(m.doc)){
@@ -746,7 +847,7 @@ const HANDLERS = {
     }
     return hits.length ? hits.join("\n") : "Nothing found for \"" + args.query + "\".";
   },
-  create_mindmap(args){
+  async create_mindmap(args){
     // Sans cette garde, un appel où « markdown » manque donnait String(undefined) =
     // la chaîne "undefined" : une carte à un seul nœud, écrite sur le disque sans erreur.
     if(typeof args.markdown !== "string" || !args.markdown.trim())
@@ -764,12 +865,12 @@ const HANDLERS = {
     const doc = { v:1, root, images:[], stickies:[] };
     const st = okStyleMcp(args.style);
     if(st) doc.style = st;
-    const file = writeDoc(args.name || root.text, doc, args.folder);
+    const file = await writeDoc(args.name || root.text, doc, args.folder);
     return `✅ Map created (${countNodes(root)} nodes): ${file}\n${importHint()}`;
   },
-  create_board(args){
+  async create_board(args){
     const { doc, warnings } = buildBoardDoc(args.name || "Board", args.elements, args.connections, args.style);
-    const file = writeDoc(args.name || "Board", doc, args.folder);
+    const file = await writeDoc(args.name || "Board", doc, args.folder);
     const n = doc.shapes.length + doc.stickies.length;
     // Les avertissements passent AVANT l'astuce d'import : c'est le seul moment où le texte
     // peut encore être raccourci, et une ligne noyée en fin de réponse ne se lit pas.
@@ -781,12 +882,23 @@ const HANDLERS = {
       : "";
     return `✅ Board created (${n} elements, ${doc.arrows.length} connection(s)): ${file}\n${warn}${importHint()}`;
   },
-  propose_changes(args){
-    const m = findMap(args.file);
-    if(m.kind === "board")
+  async propose_changes(args){
+    const m = await findMap(args.file);
+    // Un persona est la SEULE op qui vise un board — la work map en est un — et il ne vise que ça.
+    const allPersona = Array.isArray(args.changes) && args.changes.length > 0 && args.changes.every(c=>c && c.op === "persona");
+    if(m.kind === "board" && !allPersona)
       throw new Error("Proposals only apply to mind maps. A board has free positions and drawings, which a change list cannot describe.");
+    if(allPersona && m.kind !== "board")
+      throw new Error("A persona re-casts a WORK MAP canvas, which is a board. “" + m.name + "” is a mind map — pick the person's work map from list_maps (its name starts with “Work map —” or “Cartographie —”).");
     const ops = buildProposalOps(m.doc, args.changes);
-    const file = writeProposal(m, args.note, ops);
+    const file = await writeProposal(m, args.note, ops);
+    if(allPersona){
+      return `📮 Interview filed for “${m.name}” — ${ops[0].procs} processes: ${file}\n`
+        + "NOTHING has been changed yet. The canvas file is untouched.\n"
+        + (CLOUD ? "TabTree shows a banner on that work map within a minute (app open, signed in): " : "TabTree shows a banner on that work map within a few seconds (backup folder connected, app open): ") + "“Your Claude interview is ready — re-cast this work map?”. "
+        + "One click rebuilds the canvas AND its companion sheet from these hours; Cmd+Z undoes it.\n"
+        + "Tell the user to look at TabTree — do not claim the map has been re-cast.";
+    }
     const adds = ops.reduce((n,o)=>n + (o.adds||0), 0);
     const drops = ops.reduce((n,o)=>n + (o.drops||0), 0);
     return `📮 Proposal filed for “${m.name}” — ${ops.length} change(s)`
@@ -794,7 +906,7 @@ const HANDLERS = {
       + (drops ? `, ${drops} node(s) to remove` : "")
       + `: ${file}\n`
       + "NOTHING has been changed yet. The map file is untouched.\n"
-      + "TabTree shows a banner on that map within a few seconds (the backup folder must be connected, and the app open). "
+      + (CLOUD ? "TabTree shows a banner on that map within a minute (the app open and signed in). " : "TabTree shows a banner on that map within a few seconds (the backup folder must be connected, and the app open). ")
       + "The user ticks the changes they want, applies them, and Cmd+Z undoes the lot.\n"
       + "Tell the user to look at TabTree — do not claim the map has been updated.";
   }
@@ -818,7 +930,7 @@ function handle(msg){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.1.0" }
+      serverInfo: { name: "tabtree", version: "1.2.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -830,12 +942,13 @@ function handle(msg){
     const name = params && params.name;
     const fn = HANDLERS[name];
     if(!fn){ replyErr(id, -32602, "Outil inconnu : " + name); return; }
-    try{
-      const text = fn((params && params.arguments) || {});
+    // Les gestionnaires sont ASYNCHRONES depuis la source cloud (2026-09-08) : un `fn` qui
+    // lève ou qui rejette rend le même message d'erreur — Claude n'a pas à distinguer les deux.
+    Promise.resolve().then(()=>fn((params && params.arguments) || {})).then(text=>{
       reply(id, { content: [{ type:"text", text }] });
-    }catch(e){
+    }, e=>{
       reply(id, { content: [{ type:"text", text: "Erreur : " + (e && e.message || e) }], isError: true });
-    }
+    });
   } else if(id !== undefined){
     replyErr(id, -32601, "Méthode non supportée : " + method);
   }

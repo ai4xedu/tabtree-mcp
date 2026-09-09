@@ -1,6 +1,6 @@
 # TabTree templates
 
-69 ready-made templates, each one openable in your browser with no signup.
+79 ready-made templates, each one openable in your browser with no signup.
 Every file below carries the exact outline TabTree builds, so you can read it here
 or open it live.
 
@@ -29,6 +29,9 @@ or open it live.
 | [🪄 Claude Skill spec](build/skill.md) | Specify a skill before writing it — trigger wording, procedure, and the prompts that must fire it. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=skill&src=github) |
 | [🎚 System prompt builder](build/sysprompt.md) | Build a system prompt piece by piece — the map IS the prompt, copy it with ⌘C. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=sysprompt&src=github) |
 | [🖌 Design system brief for AI](build/design.md) | Tokens, components and rules — so generated screens look like one product. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=design&src=github) |
+| [🧮 Work map — scoring the processes](build/workmapsheet.md) | Companion of the Work map canvas: one row per process, five scores, and the table says how many hours a month Claude gives back — and where a human must keep signing. Then 🃏 tracks the plan. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmapsheet&src=github) |
+| [🗺️ Work map — where Claude fits in someone's job](build/workmap.md) | For AI coaches. Inventory everything a professional does, filter it through a 2×2, show the week before and after in blocks, and leave with five first steps — each with its lever. Creates its 🧮 companion sheet with it, and re-casts for any other person. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmap&src=github) |
+| [🎓 Ai4X Work Map — where Claude fits, week by week](build/workmapai4x.md) | The work map, plus the Ai4X Claude Bootcamp path: every process lands on the live that unlocks it, Live 0 to Live 6. Re-casts for any other person. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmapai4x&src=github) |
 
 ## 🌱 Personal & learning
 
@@ -54,6 +57,7 @@ or open it live.
 | [💼 Sales pipeline](sales/salespipe.md) | Opens as a kanban — five stages, the exit criterion in each column name, and no deal without a next step. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=salespipe&src=github) |
 | [🎯 ICP, persona & objections](sales/icp.md) | Who you serve, in their words — and the five sentences that stop the sale. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=icp&src=github) |
 | [🧭 Customer journey map](sales/journey.md) | Five stages against five rows — where the experience actually breaks. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=journey&src=github) |
+| [💸 Unit economics — CAC, LTV & payback](sales/unit.md) | One row per channel: what you spent, what you got, and what each customer is really worth. CAC, LTV, the ratio and the payback are computed, not typed. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=unit&src=github) |
 
 ## 📣 Content & campaigns
 
@@ -72,6 +76,8 @@ or open it live.
 |---|---|---|
 | [🔀 Flowchart — starter](flow/flowchart.md) | Start, steps, a decision with both branches, end — the shape everyone expects. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=flowchart&src=github) |
 | [🏊 Process with swimlanes](flow/swimlane.md) | Who does what, in order — the handoffs are where processes actually fail. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=swimlane&src=github) |
+| [🏭 Value stream map — factory](flow/vsm.md) | The lean classic, in its real shape: information on top, material across, and the sawtooth time ladder that shows how little of your lead time adds value. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=vsm&src=github) |
+| [🎯 Value stream map — future state](flow/vsmfuture.md) | The counter-proposal to the current-state map: supermarkets instead of piles, one cell instead of two islands, and only the pacemaker gets a schedule. Same work, a quarter of the lead time. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=vsmfuture&src=github) |
 | [✉️ Email automation flows](flow/emailflow.md) | Welcome, nurture, cart recovery and win-back — with the branch that stops the sending. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=emailflow&src=github) |
 
 ## 🧩 Canvases
@@ -83,9 +89,11 @@ or open it live.
 | [⚖️ SWOT](canvas/swot.md) | Four quadrants — inside vs outside, helpful vs harmful. The classic, in its real shape. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=swot&src=github) |
 | [🧪 Lean Canvas](canvas/leancanvas.md) | The startup version of the canvas — problem first, and the advantage nobody can copy. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=leancanvas&src=github) |
 | [💠 Value Proposition Canvas](canvas/vpc.md) | The square and the circle — what you build against what they actually need. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=vpc&src=github) |
+| [🫂 Community Design Canvas](canvas/community.md) | One wall to design an association, a network or a member community — identity at the centre, then what members live through, then what keeps it standing. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=community&src=github) |
 | [🔭 Vision, Mission & OKRs](canvas/visionokr.md) | One workshop from the big picture to a 12-month plan — vision, mission, three pillars, then OKRs and owners per department. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=visionokr&src=github) |
 | [❤️ Empathy Map](canvas/empathy.md) | Six zones around one face — what they say, think, feel and do, straight from real conversations. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=empathy&src=github) |
 | [🎤 Pitch on One Wall](canvas/pitch.md) | Hook, problem, solution, why now — the investor wall you can rehearse with ▶ Present. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=pitch&src=github) |
+| [🗂️ Founder portfolio map — where your attention goes](canvas/portfolio.md) | For C-level coaches. One card per entity, two rings that compare where the hours go with where the cash comes from, and the rate one hour of the owner's attention actually returns. Fill it live in 90 minutes — and re-cast it for any other owner. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=portfolio&src=github) |
 
 ## 📐 Charts & diagrams
 
@@ -106,6 +114,7 @@ or open it live.
 | [🎯 Quarterly OKRs](goals/okr.md) | Objectives and measurable key results, ready to tick off. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=okr&src=github) |
 | [📅 Yearly objectives](goals/annuel.md) | A year split into four quarters and their milestones. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=annuel&src=github) |
 | [🎬 Digital product launch](goals/launch.md) | The blueprint for shipping a digital product: positioning, proof, assets, launch day, first 30 days — dated, so 📊 Gantt shows the runway. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=launch&src=github) |
+| [🏁 RICE prioritisation](goals/rice.md) | Score every feature the way product teams do — reach, impact, confidence, effort — and let the table do the arithmetic. Then switch to 🃏 and build. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=rice&src=github) |
 | [🛣️ Roadmap — Now · Next · Later](goals/nownext.md) | Three honest columns and a graveyard — priorities without fake dates. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=nownext&src=github) |
 | [🧬 My Company on One Page](goals/companyos.md) | Vision, offer, customers, money, bets — the whole business, presentable in five minutes. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=companyos&src=github) |
 
@@ -117,6 +126,7 @@ or open it live.
 | [🎓 Training plan](team/formation.md) | Learning path: objectives, modules, assessment, follow-up. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=formation&src=github) |
 | [🚀 Onboarding 30/60/90](team/onboarding.md) | A new joiner's first 90 days, milestoned and checkable — dated, so 📊 Gantt shows the whole runway. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=onboarding&src=github) |
 | [🧑‍💼 Job spec + interview](team/poste.md) | The role definition and a structured interview guide, in one document. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=poste&src=github) |
+| [🧭 RACI matrix](team/raci.md) | Who is Responsible, Accountable, Consulted and Informed — one row per deliverable. The dates are real, so 📊 opens the same table as a schedule. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=raci&src=github) |
 | [🔁 Team Retrospective](team/retro.md) | Keep · Stop · Start, kudos, and three actions with names on them. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=retro&src=github) |
 
 ## 📋 Meetings & docs
