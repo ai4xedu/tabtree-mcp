@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "app.tabtree/tabtree",
   "title": "TabTree",
-  "description": "Turn conversations into mind maps and whiteboards — local files, no account, nothing uploaded.",
+  "description": "Turn conversations into mind maps and whiteboards — in your TabTree account, or local files.",
   "version": "1.2.0",
   "repository": {
     "url": "https://github.com/ai4xedu/tabtree-mcp",
@@ -20,10 +20,17 @@
       },
       "environmentVariables": [
         {
+          "name": "TABTREE_API_KEY",
+          "description": "TabTree subscription: paste a connector key from Settings → Account in the app (it starts with tt_live_). Maps Claude creates land in your library, on every device. Leave empty if you use a local folder instead.",
+          "isRequired": false,
+          "isSecret": true,
+          "placeholder": "tt_live_…"
+        },
+        {
           "name": "TABTREE_DIR",
-          "description": "Your TabTree backup folder — the one you picked with the lifebuoy button on the My maps screen. The connector reads and writes maps here, and sees nothing outside it.",
+          "description": "TabTree Classic (the local file): your backup folder — the one you picked with the lifebuoy button on the My maps screen. The connector reads and writes maps here, and sees nothing outside it. Leave empty if you use an account key instead.",
           "format": "filepath",
-          "isRequired": true,
+          "isRequired": false,
           "placeholder": "/Users/you/Documents/TabTree"
         }
       ]
