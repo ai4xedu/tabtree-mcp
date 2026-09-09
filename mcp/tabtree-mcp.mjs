@@ -29,10 +29,27 @@ const DIR = process.env.TABTREE_DIR || process.env.YGMIND_DIR || "";
 // outils ne changent pas d'un mot de contrat, seule la tuyauterie de lecture/écriture change.
 // `TABTREE_API_URL` n'est là que pour une préversion — la valeur par défaut est la production.
 // ---------------------------------------------------------------------------
-const API_KEY = String(process.env.TABTREE_API_KEY || "").trim();
+let API_KEY = String(process.env.TABTREE_API_KEY || "").trim();
+// ⚠️ UN CHAMP NON RENSEIGNÉ N'EST PAS UNE CLÉ FAUSSE (2026-09-09). Claude Desktop passe le
+// gabarit `${user_config.api_key}` TEL QUEL quand le champ est vide — mesuré le jour où la
+// réinstallation du .mcpb a vidé la configuration (la clé est `sensitive`, donc rangée dans le
+// Trousseau et liée à l'installation précédente). `CLOUD = !!API_KEY` prenait ce littéral pour
+// une clé, l'envoyait, et le serveur répondait « Unknown or revoked connector key » : un
+// message FAUX, qui envoie chercher une clé révoquée là où il n'y a simplement rien de saisi.
+if(/^\$\{.*\}$/.test(API_KEY)) API_KEY = "";
 const API_URL = String(process.env.TABTREE_API_URL || "https://aynmiptyvisxoslzkzxn.supabase.co/functions/v1/mcp").trim();
 const CLOUD = !!API_KEY;
+// La FORME d'une clé se vérifie ici, avant tout aller-retour : l'app en fabrique une en
+// `tt_live_` + 43 caractères base64url (`connKeyMaterial`). Une valeur qui n'y ressemble pas est
+// une faute de copie ou un champ mal rempli — le dire tout de suite nomme la bonne cause, et
+// évite d'aller faire dire au serveur quelque chose qu'il ne sait pas.
+const API_KEY_OK = /^tt_live_[A-Za-z0-9_-]{20,}$/.test(API_KEY);
 async function cloudCall(action, body){
+  if(!API_KEY_OK) throw new Error(
+    "TABTREE_API_KEY does not look like a connector key — it must start with \"tt_live_\". "
+  + "If you just reinstalled the connector, its settings were reset: open TabTree → \u2699\ufe0f Settings "
+  + "\u2192 Account \u2192 Claude connector, create a key, paste it into the connector's settings, "
+  + "then restart the connector.");
   let r;
   try{
     r = await fetch(API_URL, { method:"POST",
@@ -930,7 +947,7 @@ function handle(msg){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.2.0" }
+      serverInfo: { name: "tabtree", version: "1.2.1" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse

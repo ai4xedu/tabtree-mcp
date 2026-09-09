@@ -1,6 +1,6 @@
 {
   "name": "tabtree-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "mcpName": "app.tabtree/tabtree",
   "description": "Let Claude read your TabTree library and turn conversations into mind maps and whiteboards — in your TabTree account, or from local files.",
   "repository": {
