@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "tabtree",
   "display_name": "TabTree",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Read your TabTree library and turn conversations into mind maps and boards.",
   "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"map this codebase\" or \"draw our database schema as a board\", and the result appears in your TabTree library. Ask it to \"add the risks to my Q3 plan\" and TabTree shows you the proposed changes on the open map, one by one, for you to accept or drop.\n\nTwo ways to connect, pick ONE:\n\n• TabTree (subscription, your maps in your account): paste a connector key. Create it in TabTree → ⚙️ Settings → Account → Claude connector. Claude then reads and writes the maps of your account, from any machine, and new maps appear in the app within a minute.\n\n• TabTree Classic (the local file): pick the backup folder you chose with the lifebuoy button on the My maps screen. Claude reads the maps in that folder and writes new ones next to them; you pull them into the app from the 🛟 menu.\n\nIn both modes the connector **only ever creates new maps** — it cannot overwrite one, cannot delete one, and never touches your browser storage. Changes to an existing map are filed as a proposal that TabTree shows as a banner on that map: you tick what you want, apply it, and Cmd+Z undoes the lot.",
   "author": {
@@ -52,7 +52,7 @@
     },
     {
       "name": "create_mindmap",
-      "description": "Creates a new mind map from a markdown outline."
+      "description": "Creates a new mind map from a markdown outline — with screenshots on nodes if you pass image files."
     },
     {
       "name": "create_board",

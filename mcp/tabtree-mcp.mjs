@@ -18,8 +18,11 @@
 // Protocole : JSON-RPC 2.0, un message JSON par ligne sur stdin/stdout.
 // ============================================================================
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join, basename, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { inflateSync, deflateSync } from "node:zlib";
+import { tmpdir, platform } from "node:os";
 
 const DIR = process.env.TABTREE_DIR || process.env.YGMIND_DIR || "";
 // ---------------------------------------------------------------------------
@@ -184,6 +187,276 @@ function tplPicAssign(n){
       x.children.forEach(walk);
     })(n);
   }
+
+// ---------------------------------------------------------------------------
+// Une CAPTURE D'ÉCRAN sur un nœud (`node.img`, 2026-09-15)
+//
+// Demande de l'utilisateur : « générer une mindmap avec des screenshots tirés d'une app ».
+// Le champ existait de bout en bout — `node.img` est la COUVERTURE d'un nœud, tenue dans les
+// cinq places, peinte sur le canevas, dans l'export et sur le recto kanban. Ce qui manquait,
+// c'est la PORTE : le connecteur ne savait poser qu'une désignation (`pic`), jamais des pixels.
+//
+// Deux contraintes décident de tout ce qui suit :
+//  1. `okCover` (index.html) n'accepte qu'un `data:image/(png|jpeg|webp|gif)` de moins de
+//     COVER_MAX_BYTES caractères. Une capture d'écran Retina fait 2 à 5 Mo : embarquée telle
+//     quelle, l'app la REFUSE à l'ouverture et le nœud arrive nu — sans une erreur. Il faut donc
+//     ré-encoder ICI, avant d'écrire. La constante et la fonction sont portées MOT POUR MOT et le
+//     test les compare à l'app : si elles divergent, le connecteur écrit une image que l'app
+//     efface, et personne ne sait pourquoi.
+//  2. Le connecteur est ZÉRO dépendance et Node n'a aucun codec d'image. Trois encodeurs, dans
+//     l'ordre : `sips` (livré avec macOS), `magick`/`convert` (ImageMagick, s'il est là), et un
+//     chemin PUR JS — décodeur PNG (zlib est natif), réduction par moyenne de zone, encodeur PNG.
+//     Le chemin JS ne lit que du PNG, ce qui est le format de TOUTES les captures que Claude
+//     produit (navigateur, computer-use, simulateur). Quand rien ne tient dans le budget, on
+//     REFUSE en nommant la limite — jamais une image tronquée, jamais un nœud silencieusement nu.
+//
+// Le côté long est ré-encodé à IMG_LONG = 840 px, soit 2 × COVER_MAX_DIM : l'app affiche une
+// couverture à 420 px au plus, et 840 la garde nette sur un écran Retina. Au-delà on stockerait
+// des pixels que personne ne voit. Le budget par image (IMG_BUDGET) est bien plus bas que
+// COVER_MAX_BYTES, et c'est délibéré : vingt captures à 900 Ko feraient un document de 18 Mo, lu
+// SYNCHRONIQUEMENT depuis le miroir localStorage de l'app. À 840 px en JPEG, une capture pèse
+// 80 à 200 Ko ; en PNG (chemin JS) 150 à 400 Ko — d'où les trois paliers de repli.
+// ---------------------------------------------------------------------------
+const COVER_MAX_BYTES = 900000; // ~900 Ko de data URL : au-delà, on refuse
+function okCover(v){
+    return (typeof v === "string" && v.length <= COVER_MAX_BYTES
+      && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v)) ? v : "";
+  }
+const IMG_LONG = 840;                     // côté long visé (2 × COVER_MAX_DIM de l'app)
+const IMG_STEPS = [840, 600, 420];        // paliers de repli quand le budget ne tient pas
+const IMG_BUDGET = 320000;                // data URL par image — bien sous COVER_MAX_BYTES, voir ci-dessus
+const IMG_FILE_MAX = 40 * 1024 * 1024;    // un fichier plus gros n'est pas une capture d'écran
+const IMG_JPEG_Q = 82;
+const IMG_MIMES = { png:"image/png", jpeg:"image/jpeg", webp:"image/webp", gif:"image/gif" };
+
+// Sonde les octets, jamais l'extension : un « .png » qui contient du JPEG s'ouvre partout, et
+// c'est l'octet qui décide de ce que l'app saura décoder.
+function imageInfo(buf){
+  if(!buf || buf.length < 12) return null;
+  if(buf[0] === 0x89 && buf.toString("latin1", 1, 4) === "PNG" && buf.length >= 24)
+    return { kind:"png", w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  if(buf[0] === 0xFF && buf[1] === 0xD8){
+    let i = 2;
+    while(i + 9 < buf.length){
+      if(buf[i] !== 0xFF){ i++; continue; }
+      const m = buf[i + 1];
+      if(m === 0xFF){ i++; continue; }
+      if(m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC)
+        return { kind:"jpeg", h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+      if(m === 0xD8 || (m >= 0xD0 && m <= 0xD7) || m === 0x01){ i += 2; continue; }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+    return { kind:"jpeg", w:0, h:0 };
+  }
+  if(buf.toString("latin1", 0, 4) === "GIF8")
+    return { kind:"gif", w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
+  if(buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP" && buf.length >= 30){
+    const c = buf.toString("latin1", 12, 16);
+    if(c === "VP8 ") return { kind:"webp", w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+    if(c === "VP8L"){ const b = buf.subarray(21, 25); return { kind:"webp", w: 1 + (((b[1] & 0x3F) << 8) | b[0]), h: 1 + (((b[3] & 0xF) << 10) | (b[2] << 2) | ((b[1] & 0xC0) >> 6)) }; }
+    if(c === "VP8X") return { kind:"webp", w: 1 + buf.readUIntLE(24, 3), h: 1 + buf.readUIntLE(27, 3) };
+    return { kind:"webp", w:0, h:0 };
+  }
+  return null;
+}
+function dataUrlOf(buf, kind){ return "data:" + IMG_MIMES[kind] + ";base64," + buf.toString("base64"); }
+
+// --- Le chemin PUR JS : PNG → RGB, réduction, → PNG ------------------------------------
+// 8 bits, non entrelacé, types 0/2/3/4/6 : c'est ce qu'écrivent Chrome, macOS et Windows pour
+// une capture. Le reste (16 bits, entrelacé) est refusé en le disant. L'alpha est composité
+// sur du BLANC — même règle qu'`avatarFromFile` dans l'app : une capture transparente sortirait
+// noire dans un JPEG, et grise dans l'export.
+function pngDecode(buf){
+  let i = 8, w = 0, h = 0, depth = 0, ct = 0, inter = 0, plte = null;
+  const idat = [];
+  while(i + 8 <= buf.length){
+    const len = buf.readUInt32BE(i), type = buf.toString("latin1", i + 4, i + 8);
+    const data = buf.subarray(i + 8, i + 8 + len);
+    if(type === "IHDR"){ w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ct = data[9]; inter = data[12]; }
+    else if(type === "PLTE") plte = data;
+    else if(type === "IDAT") idat.push(data);
+    else if(type === "IEND") break;
+    i += 12 + len;
+  }
+  if(!w || !h) throw new Error("the PNG has no IHDR");
+  if(depth !== 8) throw new Error("a " + depth + "-bit PNG — only 8-bit PNGs can be re-encoded here");
+  if(inter) throw new Error("an interlaced PNG cannot be re-encoded here");
+  const ch = { 0:1, 2:3, 3:1, 4:2, 6:4 }[ct];
+  if(!ch || (ct === 3 && !plte)) throw new Error("unsupported PNG colour type " + ct);
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = w * ch, rgb = new Uint8Array(w * h * 3);
+  let prev = new Uint8Array(stride), cur = new Uint8Array(stride), p = 0;
+  for(let y = 0; y < h; y++){
+    const f = raw[p++];
+    for(let x = 0; x < stride; x++){
+      const a = x >= ch ? cur[x - ch] : 0, b = prev[x], c = x >= ch ? prev[x - ch] : 0;
+      let v = raw[p++];
+      if(f === 1) v += a; else if(f === 2) v += b; else if(f === 3) v += (a + b) >> 1;
+      else if(f === 4){ const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c); v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); }
+      cur[x] = v & 255;
+    }
+    for(let x = 0; x < w; x++){
+      const q = x * ch; let r, g, bl, al = 255;
+      if(ct === 0){ r = g = bl = cur[q]; }
+      else if(ct === 4){ r = g = bl = cur[q]; al = cur[q + 1]; }
+      else if(ct === 2){ r = cur[q]; g = cur[q + 1]; bl = cur[q + 2]; }
+      else if(ct === 6){ r = cur[q]; g = cur[q + 1]; bl = cur[q + 2]; al = cur[q + 3]; }
+      else { const k = cur[q] * 3; r = plte[k]; g = plte[k + 1]; bl = plte[k + 2]; }
+      if(al < 255){ r = (r * al + 255 * (255 - al)) / 255 | 0; g = (g * al + 255 * (255 - al)) / 255 | 0; bl = (bl * al + 255 * (255 - al)) / 255 | 0; }
+      const o = (y * w + x) * 3; rgb[o] = r; rgb[o + 1] = g; rgb[o + 2] = bl;
+    }
+    const t = prev; prev = cur; cur = t;
+  }
+  return { w, h, rgb };
+}
+// Moyenne de zone : chaque pixel de sortie est la moyenne du rectangle source qu'il couvre.
+// C'est ce qui garde lisible le texte d'une capture réduite d'un facteur 3 — un simple
+// sous-échantillonnage saute des lignes de texte entières.
+function rgbScale(src, W, H){
+  const { w, h, rgb } = src, out = new Uint8Array(W * H * 3);
+  for(let Y = 0; Y < H; Y++){
+    const y0 = Math.floor(Y * h / H), y1 = Math.max(y0 + 1, Math.floor((Y + 1) * h / H));
+    for(let X = 0; X < W; X++){
+      const x0 = Math.floor(X * w / W), x1 = Math.max(x0 + 1, Math.floor((X + 1) * w / W));
+      let r = 0, g = 0, b = 0, n = 0;
+      for(let y = y0; y < y1; y++){ let o = (y * w + x0) * 3; for(let x = x0; x < x1; x++){ r += rgb[o]; g += rgb[o + 1]; b += rgb[o + 2]; o += 3; n++; } }
+      const q = (Y * W + X) * 3; out[q] = r / n | 0; out[q + 1] = g / n | 0; out[q + 2] = b / n | 0;
+    }
+  }
+  return { w: W, h: H, rgb: out };
+}
+const CRC_T = (()=>{ const t = new Int32Array(256); for(let n = 0; n < 256; n++){ let c = n; for(let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; } return t; })();
+function crc32(buf){ let c = -1; for(let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 255] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+function pngEncode(img){
+  const { w, h, rgb } = img;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for(let y = 0; y < h; y++){ raw[y * (w * 3 + 1)] = 0; raw.set(rgb.subarray(y * w * 3, (y + 1) * w * 3), y * (w * 3 + 1) + 1); }
+  const chunk = (type, data)=>{
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0); out.write(type, 4, "latin1"); data.copy(out, 8);
+    out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
+}
+
+// --- Les encodeurs, et l'ordre dans lequel on les essaie ---------------------------------
+// `TABTREE_IMG_ENCODER` force un chemin (js | sips | magick) — c'est ce qui permet au test
+// d'exercer le chemin pur JS sur une machine qui a `sips`, et à qui veut un rendu identique
+// sur toutes ses machines de le demander.
+function encoders(){
+  const want = String(process.env.TABTREE_IMG_ENCODER || "").trim();
+  if(want) return [want];
+  return platform() === "darwin" ? ["sips", "magick", "js"] : ["magick", "js"];
+}
+function withTmpFiles(fn){
+  const dir = mkdtempSync(join(tmpdir(), "tabtree-img-"));
+  try{ return fn(dir); }
+  finally{ try{ rmSync(dir, { recursive:true, force:true }); }catch(e){} }
+}
+// Rend { buf, kind, w, h } ou lève. `long` = côté long visé.
+function encodeWith(name, buf, info, long){
+  if(name === "js"){
+    if(info.kind !== "png") throw new Error("the built-in encoder only reads PNG");
+    const src = pngDecode(buf);
+    const k = Math.min(1, long / Math.max(src.w, src.h));
+    const W = Math.max(1, Math.round(src.w * k)), H = Math.max(1, Math.round(src.h * k));
+    const out = pngEncode(k < 1 ? rgbScale(src, W, H) : src);
+    return { buf: out, kind:"png", w: W, h: H };
+  }
+  return withTmpFiles(dir=>{
+    const inp = join(dir, "in." + (info.kind === "jpeg" ? "jpg" : info.kind)), outp = join(dir, "out.jpg");
+    writeFileSync(inp, buf);
+    if(name === "sips"){
+      execFileSync("sips", ["-Z", String(long), "-s", "format", "jpeg", "-s", "formatOptions", String(IMG_JPEG_Q), inp, "--out", outp], { stdio:"ignore", timeout: 20000 });
+    } else if(name === "magick"){
+      const bin = ["magick", "convert"];
+      let ok = false, last = null;
+      for(const b of bin){
+        try{ execFileSync(b, [inp, "-resize", long + "x" + long + ">", "-quality", String(IMG_JPEG_Q), outp], { stdio:"ignore", timeout: 20000 }); ok = true; break; }
+        catch(e){ last = e; }
+      }
+      if(!ok) throw last || new Error("ImageMagick is not installed");
+    } else throw new Error("unknown encoder " + name);
+    const out = readFileSync(outp), oi = imageInfo(out);
+    if(!oi || oi.kind !== "jpeg") throw new Error(name + " produced no JPEG");
+    return { buf: out, kind:"jpeg", w: oi.w, h: oi.h };
+  });
+}
+
+// --- La porte : un fichier ou une data URL → une couverture que l'app acceptera ---------
+// Rend { img, note } — `note` dit ce qui a été fait, pour la réponse : une image ré-encodée
+// à l'insu de Claude serait une capture qu'il croit envoyer en pleine résolution.
+function readImageSpec(spec, where){
+  if(!spec || typeof spec !== "object") throw new Error(`${where}: give \`file\` (a path on this machine) or \`data\` (a data:image/… URL).`);
+  if(typeof spec.data === "string" && spec.data){
+    const m = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/.exec(spec.data.trim());
+    if(!m) throw new Error(`${where}: \`data\` must be a data:image/(png|jpeg|webp|gif);base64,… URL.`);
+    return { buf: Buffer.from(m[2].replace(/\s+/g, ""), "base64"), label: "inline image" };
+  }
+  if(typeof spec.file === "string" && spec.file.trim()){
+    const p = resolve(spec.file.trim());
+    if(!existsSync(p)) throw new Error(`${where}: no file at ${p}. Save the screenshot to disk first (a PNG), then pass its full path.`);
+    const st = statSync(p);
+    if(!st.isFile()) throw new Error(`${where}: ${p} is not a file.`);
+    if(st.size > IMG_FILE_MAX) throw new Error(`${where}: ${basename(p)} is ${(st.size / 1048576).toFixed(0)} MB — too large for a screenshot (40 MB max).`);
+    return { buf: readFileSync(p), label: basename(p) };
+  }
+  throw new Error(`${where}: give \`file\` (a path on this machine) or \`data\` (a data:image/… URL).`);
+}
+function coverFrom(spec, where){
+  const { buf, label } = readImageSpec(spec, where);
+  const info = imageInfo(buf);
+  if(!info) throw new Error(`${where}: ${label} is not a PNG, JPEG, WebP or GIF image.`);
+  const long = Math.max(info.w, info.h);
+  const src = `${info.w}×${info.h} ${info.kind.toUpperCase()}`;
+  // Tel quel quand ça tient DÉJÀ — le budget et la taille : ré-encoder une image qui va bien
+  // ne ferait que la dégrader.
+  if(long && long <= IMG_LONG){
+    const d = dataUrlOf(buf, info.kind);
+    if(d.length <= IMG_BUDGET && okCover(d)) return { img: d, note: `${label} (${src}, ${Math.round(d.length / 1024)} KB, kept as is)` };
+  }
+  const tried = [];
+  for(const step of IMG_STEPS){
+    if(long && step > long && step !== IMG_STEPS[IMG_STEPS.length - 1]) continue;   // ne pas « réduire » vers plus grand
+    for(const enc of encoders()){
+      let out;
+      try{ out = encodeWith(enc, buf, info, step); }
+      catch(e){ tried.push(enc + "@" + step + ": " + (e && e.message || e).split("\n")[0]); continue; }
+      const d = dataUrlOf(out.buf, out.kind);
+      if(d.length <= IMG_BUDGET && okCover(d))
+        return { img: d, note: `${label} (${src} → ${out.w}×${out.h} ${out.kind.toUpperCase()}, ${Math.round(d.length / 1024)} KB, via ${enc})` };
+      tried.push(enc + "@" + step + ": " + Math.round(d.length / 1024) + " KB, over the " + Math.round(IMG_BUDGET / 1024) + " KB budget");
+    }
+  }
+  throw new Error(`${where}: ${label} (${src}) could not be brought under ${Math.round(IMG_BUDGET / 1024)} KB. `
+    + (info.kind === "png" ? "Crop it to the part that matters, or " : "Save it as a PNG (the built-in encoder only reads PNG), or ")
+    + "install ImageMagick. Tried: " + tried.join("; "));
+}
+// Pose les captures d'une carte NEUVE : chaque entrée désigne un nœud par son texte (ou un
+// chemin « Parent > Nœud »), exactement comme une proposition — une désignation qui touche deux
+// nœuds est refusée, jamais devinée. Une capture REMPLACE une illustration `pic` : deux images
+// sur un nœud seraient deux vérités pour une question, et c'est `deserialize` qui trancherait.
+function applyImages(root, images){
+  if(images == null) return [];
+  if(!Array.isArray(images)) throw new Error("`images` must be a list of { target, file } (or { target, data }).");
+  if(images.length > 60) throw new Error("Too many screenshots in one map (60 max).");
+  const notes = [];
+  images.forEach((im, i)=>{
+    const where = "images[" + i + "]";
+    const target = String((im && im.target) == null ? "" : im.target);
+    const r = propFind(root, target);
+    if(r.error === "empty")   throw new Error(`${where}: \`target\` is required — the exact text of the node the screenshot goes on.`);
+    if(r.error === "missing") throw new Error(`${where}: no node "${target}" in this outline. Use the exact wording of a line (without its bullet, checkbox or @-marker).`);
+    if(r.error === "ambiguous") throw new Error(`${where}: "${target}" matches ${r.count} nodes. Name an ancestor too, e.g. "Parent > ${parts_last(target)}".`);
+    const { img, note } = coverFrom(im, where);
+    r.node.img = img;
+    if(r.node.pic) delete r.node.pic;
+    notes.push("“" + String(r.node.text || "").slice(0, 60) + "” ← " + note);
+  });
+  return notes;
+}
 
 // ---------------------------------------------------------------------------
 // Désignation d'un nœud (partagé mot pour mot avec l'app — voir tabtree-mcp.test.mjs)
@@ -616,7 +889,7 @@ function countForest(roots){ return roots.reduce((n,r)=>n + countNodes(r), 0); }
 // connecteur la refuserait à l'écriture, ou l'app la jetterait à la lecture — dans les deux
 // cas Claude croirait avoir proposé quelque chose qui n'arrive jamais chez l'utilisateur.
 // C'est le défaut du losange, rejoué. Un test compare les deux listes en ensembles.
-const PROP_OPS = ["add","rename","note","check","delete","move","pic","persona"];
+const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona"];
 
 // Tout est vérifié ICI, contre la carte réelle, et un défaut fait ÉCHOUER l'appel. C'est
 // délibéré : une cible introuvable remonte à Claude, qui peut relire la carte et corriger,
@@ -641,11 +914,18 @@ function buildProposalOps(mapDoc, changes){
       // profondeur — « une proposition à moitié valide arrive en lignes barrées » — ne
       // s'applique pas : une op persona est ATOMIQUE, elle rebâtit la toile ou ne fait rien.
       const P = c.persona;
-      if(!P || typeof P !== "object" || !Array.isArray(P.modules) || !P.modules.length)
-        throw new Error(`${where}: \`persona\` must be the interview object — { who, role, mission, tools, meetings, opener, modules:[{ name, procs:[{ name, h, after, freq, rep, data, stakes, lever, step, why }] }], trajectory, signs, parking }.`);
+      // DEUX personas (2026-09-11) : celui d'une WORK MAP porte des `modules`, celui d'un SECOND
+      // CERVEAU des `domains`. Même contrôle superficiel — `okBrain` juge à l'application.
+      const isBrain = !!(P && typeof P === "object" && Array.isArray(P.domains) && P.domains.length);
+      if(!P || typeof P !== "object" || (!isBrain && (!Array.isArray(P.modules) || !P.modules.length)))
+        throw new Error(`${where}: \`persona\` must be the interview object — a work map { who, role, mission, tools, meetings, opener, modules:[{ name, procs:[{ name, h, after, freq, rep, data, stakes, lever, step, why }] }], trajectory, signs, parking }, or a second-brain blueprint { who, role, mission, tools, opener, domains:[{ name, kind, share, holds }], losses, outputs, sources, nevermix, cadence, review, ailevel, signs }.`);
+      if(JSON.stringify(P).length > 60000) throw new Error(`${where}: the persona is too large (60000 characters max).`);
+      if(isBrain){
+        if(P.domains.length > 5) throw new Error(`${where}: the blueprint has ${P.domains.length} domains — five at most.`);
+        return { op, persona: P, procs: 0, domains: P.domains.length };
+      }
       const n = P.modules.reduce((a, m)=>a + ((m && Array.isArray(m.procs)) ? m.procs.length : 0), 0);
       if(n < 3) throw new Error(`${where}: the persona has ${n} process(es) — a work map needs at least three. Finish the interview first.`);
-      if(JSON.stringify(P).length > 60000) throw new Error(`${where}: the persona is too large (60000 characters max).`);
       return { op, persona: P, procs: n };
     }
     const target = String(c.target == null ? "" : c.target);
@@ -683,6 +963,15 @@ function buildProposalOps(mapDoc, changes){
           + `or "a:" followed by one of: ${ART_IDS_MCP.join(", ")} — or "" to remove it.`);
       }
       out.pic = pic;
+    } else if(op === "img"){
+      // Des PIXELS, cette fois — ré-encodés ICI pour passer `okCover` chez l'utilisateur. Une
+      // capture trop lourde est refusée à l'écriture, en nommant la limite, plutôt que d'arriver
+      // dans le panneau comme une ligne grisée. `img: ""` retire la capture.
+      if(c.img === "" || c.img === null){ out.img = ""; }
+      else {
+        const { img, note } = coverFrom(c, where);
+        out.img = img; out.shot = note;
+      }
     } else if(op === "move"){
       // ⚠️ Dans le FICHIER les colonnes sont `{cols:[…]}` ; en mémoire, côté app, c'est un
       // tableau nu. Confondre les deux donne un contrôle qui ne regarde rien.
@@ -702,11 +991,18 @@ function buildProposalOps(mapDoc, changes){
 }
 function parts_last(spec){ const p = String(spec||"").split(">"); return p[p.length-1].trim(); }
 
+// L'app ignore un fichier de proposition au-delà de PROP_FILE_MAX octets (`propScan`) — sans un
+// mot, puisqu'elle ne peut pas savoir ce qu'il contenait. Avec des captures d'écran dedans, la
+// borne se rencontre : on refuse ICI en nommant le geste, jamais un dépôt qui n'arrive pas.
+const PROP_FILE_MAX = 1400000;
 async function writeProposal(map, note, ops){
   const payload = (id)=>({
     v: 1, kind: "tabtree-proposal", mapId: id, mapFile: CLOUD ? map.file : basename(map.file), mapName: map.name,
     createdAt: Date.now(), by: "Claude", note: String(note||"").slice(0, 2000), ops
   });
+  const shots = ops.filter(o=>o.op === "img" && o.img).length;
+  if(JSON.stringify(payload("x")).length > PROP_FILE_MAX)
+    throw new Error("This proposal is too large for TabTree's mailbox (" + Math.round(PROP_FILE_MAX / 1024) + " KB max) — it carries " + shots + " screenshot(s). Send it as several proposals with fewer screenshots each.");
   if(CLOUD){
     // La boîte aux lettres cloud : la table `proposals`, que l'app relit au sondage suivant.
     // Même charge utile que le fichier — c'est le même `parseProposal` qui la lit côté app.
@@ -763,11 +1059,16 @@ const TOOLS = [
   },
   {
     name: "create_mindmap",
-    description: "Creates a NEW TabTree mind map from a markdown outline (#/## headings, bullet lists indented by 2 spaces, [x]/[ ] checkboxes, [title](url) links, and \" @a:<id>\" / \" @e:<emoji>\" at the end of a line for an illustration). The first top-level line becomes the centre. Writes a .tabtree file into the backup folder; the user pulls it into the app from the 🛟 menu.",
+    description: "Creates a NEW TabTree mind map from a markdown outline (#/## headings, bullet lists indented by 2 spaces, [x]/[ ] checkboxes, [title](url) links, and \" @a:<id>\" / \" @e:<emoji>\" at the end of a line for an illustration). The first top-level line becomes the centre. SCREENSHOTS: pass `images` — a list of { target, file } where `file` is the path of a PNG/JPEG on this machine (a screenshot you saved) and `target` the exact text of the node it goes on; the picture is re-encoded to fit and drawn as the node's cover. Writes a .tabtree file into the backup folder; the user pulls it into the app from the 🛟 menu.",
     inputSchema: { type:"object", properties:{
       name:{ type:"string", description:"Name of the map" },
       markdown:{ type:"string", description:"Markdown outline (headings and/or bullet list). End any line with \" @a:<id>\" to give that node a built-in illustration, or \" @e:<emoji>\" for one large emoji — e.g. \"Launch @a:rocket\". Ids: person, team, chat, idea, target, trophy, star, heart, warning, done, flag, clock, laptop, phone, mail, folder, book, chart, money, calendar, building, car, globe, rocket, house, pin, plane, coffee, plant, sun, camera, music, lock, key, health, gift. An unknown id is left as plain text rather than dropped." },
       folder:{ type:"string", description:"Optional TabTree subfolder (e.g. \"From Claude\")" },
+      images:{ type:"array", description:"Optional screenshots, one per node: { target, file } or { target, data }. `target` = the exact text of a line of the outline (or \"Ancestor > Node\" when the wording repeats); `file` = full path of a PNG/JPEG/WebP/GIF on this machine (take the screenshot, save it, pass the path); `data` = a data:image/… URL instead of a file. The image is re-encoded to about 840 px and becomes the node's cover picture (it replaces any @a:/@e: illustration on that node). 60 max.", items:{ type:"object", properties:{
+        target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\"" },
+        file:{ type:"string", description:"Path of the image file on this machine" },
+        data:{ type:"string", description:"A data:image/(png|jpeg|webp|gif);base64,… URL — instead of `file`" }
+      }, required:["target"], additionalProperties:false } },
       style:{ type:"object", description:"Optional look of the document. Omit it for the default.", properties:{
         font:{ type:"string", enum:["","grotesk","humanist","condensed","rounded","serif","garamond","didone","slab","typewriter","mono","hand"], description:"Type family: grotesk (corporate), humanist (warm), condensed (dense), rounded (friendly), serif/garamond (editorial), didone (elegant), slab (sturdy), typewriter, mono (technical), hand (handwritten)." },
         shape:{ type:"string", enum:["","line","plain"], description:"Node shape: cards (default), line = underlined, plain = plain text." },
@@ -813,12 +1114,12 @@ const TOOLS = [
   },
   {
     name: "propose_changes",
-    description: "Proposes changes to an EXISTING mind map: add branches, rename a node, write a note, tick a task, remove a branch, illustrate a node — or, with op \"persona\", re-cast a WORK MAP canvas from a finished interview (the JSON block of the « ma cartographie du travail » skill). Nothing is applied — the proposal appears in TabTree as a banner on that map, the user reviews it change by change and picks what to keep (and can undo with Cmd+Z afterwards). Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice. Read the map first so the wording matches.",
+    description: "Proposes changes to an EXISTING mind map: add branches, rename a node, write a note, tick a task, remove a branch, illustrate a node, put a screenshot on a node (op \"img\" with `file`) — or, with op \"persona\", re-cast a WORK MAP canvas from a finished interview (the JSON block of the « ma cartographie du travail » skill). Nothing is applied — the proposal appears in TabTree as a banner on that map, the user reviews it change by change and picks what to keep (and can undo with Cmd+Z afterwards). Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice. Read the map first so the wording matches.",
     inputSchema: { type:"object", properties:{
       file:{ type:"string", description:"The map to change — a file name (or map name) from list_maps" },
       note:{ type:"string", description:"One line telling the user what this proposal does and why. Shown above the changes." },
       changes:{ type:"array", description:"The proposed changes, applied in order", items:{ type:"object", properties:{
-        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","persona"], description:"add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) from an interview — no target" },
+        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","img","persona"], description:"add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; img = put a SCREENSHOT on it (give `file`, the path of the image on this machine — or `data`; `img: \"\"` removes it); persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) or a Second Brain Blueprint (“Second brain —”) from an interview — no target" },
         target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\" if ambiguous (not used by persona)" },
         persona:{ type:"object", description:"persona: the interview object exactly as the skill returns it — who, role, mission, tools, meetings, opener, modules[{name, procs[{name,h,after,freq,rep,data,stakes,lever,step,why}]}], trajectory, signs, parking. TabTree rebuilds the canvas AND its companion sheet from it." },
         markdown:{ type:"string", description:"add: the new branch as a bullet list, 2 spaces per level" },
@@ -826,7 +1127,10 @@ const TOOLS = [
         note:{ type:"string", description:"note: the note body (empty string clears it)" },
         value:{ type:"boolean", description:"check: true to tick, false to untick" },
         col:{ type:"string", description:"move: the kanban column id (read_map shows them), or \"\" to take the card off the board" },
-        pic:{ type:"string", description:"pic: \"a:<id>\" for a built-in illustration, or \"e:<emoji>\" for one large emoji, or \"\" to remove it. Ids: person, team, chat, idea, target, trophy, star, heart, warning, done, flag, clock, laptop, phone, mail, folder, book, chart, money, calendar, building, car, globe, rocket, house, pin, plane, coffee, plant, sun, camera, music, lock, key, health, gift." }
+        pic:{ type:"string", description:"pic: \"a:<id>\" for a built-in illustration, or \"e:<emoji>\" for one large emoji, or \"\" to remove it. Ids: person, team, chat, idea, target, trophy, star, heart, warning, done, flag, clock, laptop, phone, mail, folder, book, chart, money, calendar, building, car, globe, rocket, house, pin, plane, coffee, plant, sun, camera, music, lock, key, health, gift." },
+        file:{ type:"string", description:"img: full path of the screenshot (PNG/JPEG/WebP/GIF) on this machine. It is re-encoded to about 840 px and becomes the node's cover picture." },
+        data:{ type:"string", description:"img: a data:image/…;base64 URL instead of `file`" },
+        img:{ type:"string", description:"img: pass \"\" to REMOVE the screenshot from that node (otherwise give `file` or `data`)" }
       }, required:["op"], additionalProperties:false } }
     }, required:["file","changes"], additionalProperties:false }
   }
@@ -879,11 +1183,15 @@ const HANDLERS = {
     // comparé caractère par caractère avec celui de l'app, et lui ajouter une syntaxe le ferait
     // diverger en silence. Même partage des rôles que côté modèles.
     tplPicAssign(root);
+    // Les captures d'écran APRÈS les marqueurs : une désignation se retire du texte avant que le
+    // texte serve de cible, et une capture remplace l'illustration du même nœud.
+    const shots = applyImages(root, args.images);
     const doc = { v:1, root, images:[], stickies:[] };
     const st = okStyleMcp(args.style);
     if(st) doc.style = st;
     const file = await writeDoc(args.name || root.text, doc, args.folder);
-    return `✅ Map created (${countNodes(root)} nodes): ${file}\n${importHint()}`;
+    const shotLines = shots.length ? `\n📷 ${shots.length} screenshot(s) on the map:\n` + shots.map(x=>"   • " + x).join("\n") + "\n" : "";
+    return `✅ Map created (${countNodes(root)} nodes): ${file}\n${shotLines}${importHint()}`;
   },
   async create_board(args){
     const { doc, warnings } = buildBoardDoc(args.name || "Board", args.elements, args.connections, args.style);
@@ -906,11 +1214,11 @@ const HANDLERS = {
     if(m.kind === "board" && !allPersona)
       throw new Error("Proposals only apply to mind maps. A board has free positions and drawings, which a change list cannot describe.");
     if(allPersona && m.kind !== "board")
-      throw new Error("A persona re-casts a WORK MAP canvas, which is a board. “" + m.name + "” is a mind map — pick the person's work map from list_maps (its name starts with “Work map —” or “Cartographie —”).");
+      throw new Error("A persona re-casts a WORK MAP or a SECOND BRAIN BLUEPRINT canvas, which is a board. “" + m.name + "” is a mind map — pick the person's canvas from list_maps (its name starts with “Work map —”, “Cartographie —” or “Second brain —”).");
     const ops = buildProposalOps(m.doc, args.changes);
     const file = await writeProposal(m, args.note, ops);
     if(allPersona){
-      return `📮 Interview filed for “${m.name}” — ${ops[0].procs} processes: ${file}\n`
+      return `📮 Interview filed for “${m.name}” — ${ops[0].domains ? ops[0].domains + " domains" : ops[0].procs + " processes"}: ${file}\n`
         + "NOTHING has been changed yet. The canvas file is untouched.\n"
         + (CLOUD ? "TabTree shows a banner on that work map within a minute (app open, signed in): " : "TabTree shows a banner on that work map within a few seconds (backup folder connected, app open): ") + "“Your Claude interview is ready — re-cast this work map?”. "
         + "One click rebuilds the canvas AND its companion sheet from these hours; Cmd+Z undoes it.\n"
@@ -918,10 +1226,13 @@ const HANDLERS = {
     }
     const adds = ops.reduce((n,o)=>n + (o.adds||0), 0);
     const drops = ops.reduce((n,o)=>n + (o.drops||0), 0);
+    const shots = ops.filter(o=>o.op === "img" && o.img);
     return `📮 Proposal filed for “${m.name}” — ${ops.length} change(s)`
       + (adds ? `, ${adds} node(s) to add` : "")
       + (drops ? `, ${drops} node(s) to remove` : "")
+      + (shots.length ? `, ${shots.length} screenshot(s)` : "")
       + `: ${file}\n`
+      + (shots.length ? shots.map(o=>"   📷 “" + String(o.was || o.target).slice(0, 60) + "” ← " + o.shot).join("\n") + "\n" : "")
       + "NOTHING has been changed yet. The map file is untouched.\n"
       + (CLOUD ? "TabTree shows a banner on that map within a minute (the app open and signed in). " : "TabTree shows a banner on that map within a few seconds (the backup folder must be connected, and the app open). ")
       + "The user ticks the changes they want, applies them, and Cmd+Z undoes the lot.\n"
@@ -947,7 +1258,7 @@ function handle(msg){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.2.1" }
+      serverInfo: { name: "tabtree", version: "1.3.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse

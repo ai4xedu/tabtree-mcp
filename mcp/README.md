@@ -168,14 +168,24 @@ bullet lists both work, two spaces per level, `[x]` for a checked item and
 `[title](url)` for a link. The first top-level line becomes the centre of the
 map.
 
+**Screenshots on nodes.** Ask Claude to build a map *with screenshots* — of an
+app, a website, a slide deck. Claude takes the screenshot, saves it to disk, and
+passes its path in `images`: `{ target: "Login page", file: "/path/to/shot.png" }`.
+The picture becomes the node's cover, drawn on the map, in the kanban and in
+every exported image. It is re-encoded on your machine before it is written
+(about 840 px, a few dozen KB), so a 4 MB Retina capture never bloats the map;
+nothing is uploaded anywhere. On macOS the connector uses the built-in `sips`;
+elsewhere it uses ImageMagick if installed, or its own PNG encoder. The same
+works on a map you already have: `propose_changes` with `op: "img"`.
+
 `create_board` takes a list of elements (`rect`, `ellipse`, `text`, `sticky`)
 and connections between them. Leave out the x/y coordinates and it lays the
 board out automatically — the connections define the hierarchy, left to right.
 Both accept an optional `folder`, which becomes a folder in your library.
 
 `propose_changes` is the one tool that points at a map you already have. It can
-add a branch, rename a node, write a note, tick a task, or remove a branch — and
-it does none of those things by itself. It writes a small file into a
+add a branch, rename a node, write a note, tick a task, remove a branch, or put a
+screenshot on a node — and it does none of those things by itself. It writes a small file into a
 `Propositions` subfolder of your backup folder; TabTree checks that folder while
 it is open and raises a banner on the map concerned. You review the changes one
 by one, tick the ones you want, and press **Apply**. ⌘Z undoes the lot.

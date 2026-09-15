@@ -21,7 +21,7 @@ converted and nothing is lost.
 | **One file** | The entire app is one HTML file — no install, no build, no dependencies. |
 | **Offline, always** | It runs from `file://`. Nothing leaves your machine. |
 | **Bought once** | No subscription, no account, no telemetry, no expiry. |
-| **79 templates** | Business Model Canvas, Lean Canvas, OKRs, roadmaps, agent specs… [all of them](templates/) |
+| **83 templates** | Business Model Canvas, Lean Canvas, OKRs, roadmaps, agent specs… [all of them](templates/) |
 | **It leaves the building** | PNG posts, carousel PDFs, MP4 flythroughs, or one `.html` file that carries the app and the map together. |
 | **Claude writes into it** | The connector below is free with every licence. |
 
@@ -37,7 +37,7 @@ genuinely useful on their own:
 - **[`plugins/tabtree/`](plugins/tabtree/)** — a Claude Code plugin: two facilitation
   skills that end in a real document, plus the connector. See
   [Claude Code plugin](#claude-code-plugin) below.
-- **[`templates/`](templates/)** — the 79 template outlines in plain Markdown, each with a
+- **[`templates/`](templates/)** — the 83 template outlines in plain Markdown, each with a
   link that opens it live. Paste them into TabTree, or into any outliner.
 - **[`screenshots/`](screenshots/)** — rendered by the real engine, not mocked up.
 
