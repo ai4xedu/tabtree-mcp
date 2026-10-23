@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "app.tabtree/tabtree",
   "title": "TabTree",
-  "description": "Turn conversations into mind maps and whiteboards — in your TabTree account, or local files.",
-  "version": "1.3.0",
+  "description": "Build mind maps, kanban boards and whiteboards in your TabTree account, team spaces included.",
+  "version": "1.6.1",
   "repository": {
     "url": "https://github.com/ai4xedu/tabtree-mcp",
     "source": "github"
@@ -14,21 +14,21 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "tabtree-mcp",
-      "version": "1.3.0",
+      "version": "1.6.1",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "TABTREE_API_KEY",
-          "description": "TabTree subscription: paste a connector key from Settings → Account in the app (it starts with tt_live_). Maps Claude creates land in your library, on every device. Leave empty if you use a local folder instead.",
-          "isRequired": false,
+          "description": "Your TabTree connector key: create it in TabTree, Settings → Account → Claude connector (it starts with tt_live_). Claude reads and builds maps and kanban boards in your account — and in the team spaces you belong to — on every device.",
+          "isRequired": true,
           "isSecret": true,
           "placeholder": "tt_live_…"
         },
         {
           "name": "TABTREE_DIR",
-          "description": "TabTree Classic (the local file): your backup folder — the one you picked with the lifebuoy button on the My maps screen. The connector reads and writes maps here, and sees nothing outside it. Leave empty if you use an account key instead.",
+          "description": "Legacy, TabTree Classic only (the discontinued local file): a backup folder to read and write instead of an account. Leave empty.",
           "format": "filepath",
           "isRequired": false,
           "placeholder": "/Users/you/Documents/TabTree"

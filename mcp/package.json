@@ -1,8 +1,8 @@
 {
   "name": "tabtree-mcp",
-  "version": "1.3.0",
+  "version": "1.6.1",
   "mcpName": "app.tabtree/tabtree",
-  "description": "Let Claude read your TabTree library and turn conversations into mind maps and whiteboards — in your TabTree account, or from local files.",
+  "description": "Let Claude read your TabTree library and build mind maps, kanban boards and whiteboards in your TabTree account — team spaces included.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ai4xedu/tabtree-mcp.git"
@@ -32,8 +32,8 @@
     "diagram",
     "outline",
     "kanban",
-    "local-first",
-    "offline"
+    "team",
+    "project-management"
   ],
   "homepage": "https://tabtree.app/",
   "bugs": {

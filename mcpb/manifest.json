@@ -2,16 +2,16 @@
   "manifest_version": "0.3",
   "name": "tabtree",
   "display_name": "TabTree",
-  "version": "1.3.0",
-  "description": "Read your TabTree library and turn conversations into mind maps and boards.",
-  "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"map this codebase\" or \"draw our database schema as a board\", and the result appears in your TabTree library. Ask it to \"add the risks to my Q3 plan\" and TabTree shows you the proposed changes on the open map, one by one, for you to accept or drop.\n\nTwo ways to connect, pick ONE:\n\n• TabTree (subscription, your maps in your account): paste a connector key. Create it in TabTree → ⚙️ Settings → Account → Claude connector. Claude then reads and writes the maps of your account, from any machine, and new maps appear in the app within a minute.\n\n• TabTree Classic (the local file): pick the backup folder you chose with the lifebuoy button on the My maps screen. Claude reads the maps in that folder and writes new ones next to them; you pull them into the app from the 🛟 menu.\n\nIn both modes the connector **only ever creates new maps** — it cannot overwrite one, cannot delete one, and never touches your browser storage. Changes to an existing map are filed as a proposal that TabTree shows as a banner on that map: you tick what you want, apply it, and Cmd+Z undoes the lot.",
+  "version": "1.6.1",
+  "description": "Read your TabTree library and build mind maps, kanban boards and whiteboards from a conversation.",
+  "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"make a kanban for the launch with these tasks\" or \"draw our database schema as a board\", and the result appears in your TabTree account — on your laptop and your phone, and in your team spaces for every member.\n\nAsk it to \"add these three tasks to the sprint board, for Sara, due Friday\" and they appear on the board by themselves within seconds, while TabTree is open — Cmd+Z undoes them. Changes that rewrite or remove what someone wrote (renaming, deleting, rewriting a note) are shown to you first, as a banner on that map: you tick what you want and apply it.\n\nTo connect: paste your connector key below. Create it in TabTree → Settings → Account → Claude connector.\n\nThe connector never overwrites or deletes a map, and never touches your browser storage.",
   "author": {
     "name": "Ai4x",
     "email": "info@ai4x.academy",
-    "url": "https://ai4x.academy/tabtree"
+    "url": "https://tabtree.app/"
   },
-  "homepage": "https://ai4x.academy/tabtree",
-  "documentation": "https://ai4x.academy/tabtree",
+  "homepage": "https://tabtree.app/connector/",
+  "documentation": "https://tabtree.app/connector/",
   "support": "mailto:info@ai4x.academy",
   "icon": "icon.png",
   "keywords": [
@@ -21,7 +21,9 @@
     "tabtree",
     "diagram",
     "brainstorm",
-    "outline"
+    "outline",
+    "kanban",
+    "team"
   ],
   "server": {
     "type": "node",
@@ -40,7 +42,7 @@
   "tools": [
     {
       "name": "list_maps",
-      "description": "Lists every mind map and board in the TabTree library."
+      "description": "Lists every map, kanban and board in your TabTree account and your team spaces."
     },
     {
       "name": "read_map",
@@ -59,22 +61,30 @@
       "description": "Creates a new whiteboard with shapes and anchored arrows."
     },
     {
+      "name": "create_kanban",
+      "description": "Creates a new kanban board — columns and cards with owners, dates, labels, estimates and sub-tasks."
+    },
+    {
       "name": "propose_changes",
-      "description": "Proposes changes to an existing map — TabTree shows them for approval, nothing is written to the map."
+      "description": "Changes an existing map or kanban — safe changes apply by themselves, the rest is shown to you for approval."
+    },
+    {
+      "name": "harvest",
+      "description": "Keeps what matters from a conversation — facts, decisions, lessons — in your Company knowledge and Lessons maps, after you accept it in TabTree."
     }
   ],
   "user_config": {
     "api_key": {
       "type": "string",
-      "title": "TabTree connector key (subscription)",
-      "description": "For TabTree in your account: paste the key from ⚙️ Settings → Account → Claude connector (it starts with tt_live_). Leave empty if you use TabTree Classic with a folder.",
+      "title": "TabTree connector key",
+      "description": "Paste the key from TabTree → Settings → Account → Claude connector (it starts with tt_live_).",
       "required": false,
       "sensitive": true
     },
     "backup_folder": {
       "type": "directory",
-      "title": "TabTree Classic backup folder",
-      "description": "For TabTree Classic (the local file): the folder you chose with the 🛟 button on the My maps screen. Leave empty if you pasted a connector key above.",
+      "title": "Legacy: TabTree Classic folder",
+      "description": "Only for the discontinued TabTree Classic (local file). Leave empty.",
       "required": false,
       "multiple": false
     }

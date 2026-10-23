@@ -1,64 +1,49 @@
 # TabTree Connector for Claude
 
-Let Claude read your TabTree library and build new maps for you.
+Let Claude read your TabTree library and build mind maps, kanban boards and
+whiteboards for you — in your account, on every device, and in your team spaces.
 
 > "Turn these meeting notes into a mind map."
-> "Map the structure of this codebase."
+> "Make a kanban for the launch: these eight tasks, Sara owns the design ones, due Friday."
+> "Add the three follow-ups from this call to the sprint board, in Doing."
 > "Draw our database schema as a board."
-> "Add the risks we just discussed to my Q3 plan."
 
-**You need TabTree itself.** This package is the bridge, not the app. It works
-with both editions of TabTree, and you pick the mode with ONE environment variable:
-
-| Edition | What Claude talks to | Set |
-| --- | --- | --- |
-| **TabTree** (subscription — your maps live in your account) | your account, through TabTree's API | `TABTREE_API_KEY` — the key from ⚙️ Settings → Account → **Claude connector** |
-| **TabTree Classic** (the local file, bought once) | the 🛟 backup folder on your disk | `TABTREE_DIR` — that folder's path |
-
-In account mode a new map appears in TabTree within a minute, on every device you
-are signed in on. In Classic mode it appears as a file in your backup folder, and
-you pull it in from *My maps* → **🛟** → **"Bring maps back from this folder…"**.
-
-In both modes the connector **only ever creates new maps.** It cannot overwrite a
-map, cannot delete one, and never touches your browser storage. With a folder,
-nothing is uploaded anywhere; with an account, it talks only to TabTree's own
-API for that account.
-
-Changes to a map you already have are no exception. Claude never writes to it:
-it files a **proposal**, TabTree shows it as a banner on that map, and you tick
-the changes you want. ⌘Z undoes them afterwards, like anything else you do.
+**You need a TabTree account.** This package is the bridge, not the app.
 
 ---
 
 ## Before you start
 
-**1. Get your key, or your folder.** TabTree (subscription): open the app →
-⚙️ Settings → Account → **Claude connector** → *Create a connector key*. It is
-shown once — copy it. TabTree Classic: open TabTree → *My maps* → 🛟 and pick a
-folder; that folder is what the connector reads and writes.
+**1. Get your connector key.** Open TabTree → ⚙️ Settings → Account →
+**Claude connector** → *Create a connector key*. It is shown once — copy it. It
+starts with `tt_live_`.
 
-Quickest test, account mode:
+**2. Node.js 18+ — for the npm and Claude Code routes.** Claude Desktop ships its
+own Node, so the `.mcpb` install below needs nothing.
+
+Quickest test:
 
 ```bash
 TABTREE_API_KEY=tt_live_… npx tabtree-mcp
 ```
 
-**2. Node.js 18+ — for the npm and Claude Code routes.** Claude Desktop ships
-its own Node, so the `.mcpb` install below needs nothing. For the other routes,
-check with `node --version` and install the LTS build from
-[nodejs.org](https://nodejs.org) if it errors. The app itself never needs Node.
-
 ---
 
-## Install — npm (Claude Code, Cursor, any MCP client)
+## Install — Claude Desktop (double-click)
 
-Nothing to clone, nothing to build. Point `TABTREE_DIR` at your backup folder:
+**Double-click `TabTree-Connector.mcpb`.** Claude Desktop opens its install
+screen and asks for your connector key — paste it, and that is the whole
+procedure. To change the key later, or to remove the connector, use Claude
+Desktop's own extension settings.
+
+## Install — Claude Code, Cursor, any MCP client (npm)
 
 ```bash
-claude mcp add tabtree --scope user -e TABTREE_DIR="/path/to/your/backup/folder" -- npx -y tabtree-mcp
+claude mcp add tabtree --scope user -e TABTREE_API_KEY="tt_live_…" -- npx -y tabtree-mcp
 ```
 
-For any client that reads a JSON config, the same thing:
+`--scope user` makes the connector available in every project. For any client
+that reads a JSON config:
 
 ```json
 {
@@ -66,89 +51,11 @@ For any client that reads a JSON config, the same thing:
     "tabtree": {
       "command": "npx",
       "args": ["-y", "tabtree-mcp"],
-      "env": { "TABTREE_DIR": "/path/to/your/backup/folder" }
+      "env": { "TABTREE_API_KEY": "tt_live_…" }
     }
   }
 }
 ```
-
-The path must be absolute — `~` and relative paths will not resolve.
-
----
-
-## Install — Claude Desktop (double-click)
-
-**Double-click `TabTree-Connector.mcpb`.** Claude Desktop opens its install
-screen, asks which folder to use — pick your backup folder — and that is the
-whole procedure. No terminal, no config file, no Node.
-
-To change the folder later, or to remove the connector, use Claude Desktop's own
-extension settings. Nothing was written outside the app.
-
-## Install — Claude Code (one command)
-
-`.mcpb` is a Claude Desktop format; Claude Code reads a config file instead. The
-installer writes it for you, backing up any existing one first:
-
-```bash
-node mcp/install.mjs --dir "/path/to/your/backup/folder"
-```
-
-It prints the `claude mcp add` command to paste for user-wide access.
-
-To see what it *would* do without writing anything:
-
-```bash
-node mcp/install.mjs --dir "/path/to/your/backup/folder" --dry-run
-```
-
-To check an install that already exists:
-
-```bash
-node mcp/install.mjs --check
-```
-
-### Manual install — Claude Code
-
-```bash
-claude mcp add tabtree --scope user -e TABTREE_DIR="/path/to/your/backup/folder" -- node /absolute/path/to/mcp/tabtree-mcp.mjs
-```
-
-`--scope user` makes the connector available in every project. Drop it and the
-connector only exists in the directory you ran the command from.
-
-If you would rather not use the CLI, put this in a `.mcp.json` file at the root
-of a project — same result, scoped to that project:
-
-```json
-{
-  "mcpServers": {
-    "tabtree": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp/tabtree-mcp.mjs"],
-      "env": { "TABTREE_DIR": "/path/to/your/backup/folder" }
-    }
-  }
-}
-```
-
-### Manual install — Claude Desktop (fallback)
-
-You should not need this: the `.mcpb` above does it for you. Use it only if your
-Claude Desktop is too old to install extensions. Open the config file for your
-system:
-
-| System | File |
-| --- | --- |
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
-
-Add the `tabtree` block shown above inside `mcpServers`, keeping any servers
-already listed there. Save, then **fully quit and reopen Claude Desktop** —
-reloading the window is not enough.
-
-Paths must be absolute in both clients. `~` and relative paths will not resolve.
 
 ---
 
@@ -156,69 +63,60 @@ Paths must be absolute in both clients. `~` and relative paths will not resolve.
 
 | Tool | What it does |
 | --- | --- |
-| `list_maps` | Lists every map and board — name, type, folder, size, last modified. |
-| `read_map` | Reads one map. A mind map comes back as a markdown outline, a board as elements and connections. |
-| `search_maps` | Searches the whole library — map names, nodes, notes, shapes, stickies. Case-insensitive. |
-| `create_mindmap` | Creates a new mind map from a markdown outline. |
-| `create_board` | Creates a new whiteboard — shapes and arrows that stay anchored in the app. |
-| `propose_changes` | Proposes changes to a map you already have. Nothing is written to it — TabTree asks you first. |
+| `list_maps` | Lists every map, kanban, note and board — yours and those of the team spaces you belong to. |
+| `read_map` | Reads one map. A mind map or kanban comes back as an outline with each card's column, owner, dates, priority and labels; a board as elements and connections. |
+| `search_maps` | Searches the whole library — map names, nodes, notes, shapes, stickies. |
+| `create_mindmap` | Creates a mind map from a markdown outline — or a **note** (a page of text) or a **Gantt** (give it dates). |
+| `create_kanban` | Creates a kanban board in one go: columns, and cards with owners, start and due days, priority, colour labels, time estimates, an Ai4X lever, a note (a Google Meet link in it becomes clickable), a link and sub-tasks. |
+| `create_board` | Creates a whiteboard — shapes, **images** (`kind: "image"` + a PNG/JPEG/WebP/GIF/SVG `file`: logos, photos, posters) and arrows that stay anchored in the app. |
+| `propose_changes` | Changes a map or kanban you already have — see below. |
+| `harvest` | Keeps what matters from the conversation — facts, decisions, lessons — in your Company knowledge and 🌱 Lessons maps. Nothing is filed until you accept it in TabTree. |
 
-`create_mindmap` takes an indented markdown outline. Headings (`#`, `##`) and
-bullet lists both work, two spaces per level, `[x]` for a checked item and
-`[title](url)` for a link. The first top-level line becomes the centre of the
-map.
+Every creation tool takes an optional `folder` and an optional `space`. Name a
+**team space** you are an editor of and the new map lives there: every member
+sees it.
 
-**Screenshots on nodes.** Ask Claude to build a map *with screenshots* — of an
-app, a website, a slide deck. Claude takes the screenshot, saves it to disk, and
-passes its path in `images`: `{ target: "Login page", file: "/path/to/shot.png" }`.
-The picture becomes the node's cover, drawn on the map, in the kanban and in
-every exported image. It is re-encoded on your machine before it is written
-(about 840 px, a few dozen KB), so a 4 MB Retina capture never bloats the map;
-nothing is uploaded anywhere. On macOS the connector uses the built-in `sips`;
-elsewhere it uses ImageMagick if installed, or its own PNG encoder. The same
-works on a map you already have: `propose_changes` with `op: "img"`.
+### Changing a map you already have — hybrid, on purpose
 
-`create_board` takes a list of elements (`rect`, `ellipse`, `text`, `sticky`)
-and connections between them. Leave out the x/y coordinates and it lays the
-board out automatically — the connections define the hierarchy, left to right.
-Both accept an optional `folder`, which becomes a folder in your library.
+**Safe changes apply by themselves.** Adding cards or branches, moving a card to
+a column, ticking it, setting its owner, dates, priority, labels, estimate, Ai4X
+lever, an attribute, a link, a comment, a picture — and setting up the columns
+of a map that has no kanban yet. TabTree applies them within seconds while it is
+open on one of your devices (or the next time you open it). **⌘Z undoes them**
+like anything else you do.
 
-`propose_changes` is the one tool that points at a map you already have. It can
-add a branch, rename a node, write a note, tick a task, remove a branch, or put a
-screenshot on a node — and it does none of those things by itself. It writes a small file into a
-`Propositions` subfolder of your backup folder; TabTree checks that folder while
-it is open and raises a banner on the map concerned. You review the changes one
-by one, tick the ones you want, and press **Apply**. ⌘Z undoes the lot.
+**Changes that rewrite or remove what someone wrote wait for you** — renaming,
+rewriting a note, deleting, replacing the columns of an existing board. TabTree
+shows them as a banner on the map; you tick the ones you want and press Apply.
 
-Claude names each node by its exact text, so ask it to read the map first. When
-the same wording appears twice, it must write a path — `"Q4 > Hire"` — and if it
-cannot tell them apart, the proposal is refused rather than applied to the wrong
-one. A proposal you ignore is moved to `Propositions/Reviewed`, never deleted.
+In one request, the safe changes that come *before* the first review-only change
+apply by themselves, and everything from there on waits for you — in order, so
+nothing is applied to text that is about to be renamed.
 
-If you close TabTree, or the backup folder is not connected, nothing is lost:
-the proposal waits in the folder and the banner appears the next time you open
-the app with that folder connected.
+Claude names each card or node by its exact text, so ask it to read the map
+first. When the same wording appears twice it writes a path — `"Q4 > Hire"` — and
+if it still cannot tell them apart, the change is refused rather than applied to
+the wrong one. A column is named by its name: `"Doing"`.
+
+On a team space where your role is **viewer**, Claude can read the maps but not
+change them.
+
+### Screenshots on nodes
+
+Ask Claude to build a map *with screenshots* — of an app, a website, a slide
+deck. Claude saves the screenshot and passes its path in `images`:
+`{ target: "Login page", file: "/path/to/shot.png" }`. The picture becomes the
+node's cover, on the map, in the kanban and in every exported image. It is
+re-encoded on your machine first (about 840 px, a few dozen KB). The same works
+on a map you already have: `propose_changes` with `op: "img"`.
 
 ---
 
-## Getting the maps into TabTree
+## What the connector will never do
 
-New files land in your backup folder but the app does not watch that folder, so
-nothing appears on its own. Open *My maps*, click the **🛟** button in the
-toolbar, and choose **"Bring maps back from this folder…"**. Anything already in
-your library is skipped, so you can press it as often as you like. The same
-command is in ⌘K under "Bring my maps back from a folder…".
-
-There is no ♻️ button in the toolbar: it only appears when your library is
-empty. With maps already in it, the 🛟 menu is the way in.
-
-**The folder must match.** The connector writes to the folder you configured;
-TabTree reads the folder named next to its 🛟 button. If those are two different
-folders, maps are created correctly and never appear. Every creation message
-tells you which folder was written — compare it with what the app shows.
-
-Tell Claude to use a `folder` — `"Depuis Claude"`, `"Claude"`, whatever you
-prefer — and everything it makes stays grouped in one place in your library.
+It never overwrites or deletes a map, and never touches your browser storage. It
+talks only to TabTree's own API, for your account and the team spaces you are a
+member of. Your key is stored by your client, never in a map.
 
 ---
 
@@ -228,56 +126,46 @@ prefer — and everything it makes stays grouped in one place in your library.
 full quit, not a window reload. Then check the config file is valid JSON; a
 trailing comma is enough to make the whole file be ignored silently.
 
-**"TABTREE_DIR is not set."** The `env` block is missing or the path is wrong.
-Run `node mcp/install.mjs --check` to see the path the connector resolves.
+**"Unknown or revoked connector key."** Create a new key in TabTree → Settings →
+Account → Claude connector, and paste it into the connector's settings.
 
-**"The TABTREE_DIR folder does not exist."** The path has a typo, or the folder
-is in iCloud Drive / OneDrive and has been evicted to the cloud. Open it in
-Finder or Explorer once to bring it back.
+**"TABTREE_API_KEY does not look like a connector key."** The field is empty or
+was reset — reinstalling the `.mcpb` clears it. Paste the key again.
 
-**New maps do not show up in the app.** They are files on disk until you press
-brought them in from the 🛟 menu. Check the folder in Finder first — if the file
-is there, the connector did its job, and the question is only which folder the
-app is reading.
+**Claude's changes did not appear.** Safe changes are applied by TabTree itself,
+so it must be open and signed in on one of your devices; they land within
+seconds, or the next time it opens. Changes that need your approval appear as a
+banner on that map.
 
-**A map comes back empty.** The connector reads `.tabtree` and `.ygmind` files
-one folder deep. A map filed two levels down is out of reach; move it up.
+**"The connector can read, not write."** Your trial or subscription has ended —
+or, on a team space, the space owner's plan has.
 
-**Claude filed a proposal and no banner appeared.** Three things must all be
-true: TabTree is open, its 🛟 folder is the folder the connector writes to, and
-the map the proposal targets is one this browser actually has. That last one
-catches the common case — a proposal for a map that only exists on your other
-machine stays silent here, on purpose. Type `__ygProps()` in the browser console
-to see what the app found.
+---
+
+### TabTree Classic (the discontinued local file)
+
+The connector still reads a TabTree Classic backup folder when it is given
+`TABTREE_DIR` instead of a key — maps are written there as files, and changes are
+always filed for review. This mode receives no new features.
 
 ---
 
 ## 🇫🇷 En français
 
-Le connecteur permet à Claude de lire votre bibliothèque TabTree et de créer des
-cartes et des boards. Il ne crée que de **nouveaux fichiers** : il ne peut rien
-écraser ni supprimer, et ne touche jamais au stockage du navigateur. Pour
-modifier une carte existante, il dépose une **proposition** que TabTree vous
-présente ligne par ligne : rien n'est appliqué sans votre clic, et ⌘Z l'annule.
+Le connecteur permet à Claude de lire votre bibliothèque TabTree et d'y créer des
+cartes mentales, des **kanbans**, des notes, des Gantt et des boards — dans votre
+compte, sur tous vos appareils, et dans les **espaces d'équipe** dont vous êtes
+membre.
 
-Prérequis : un dossier de sauvegarde configuré dans TabTree (🛟 dans « Mes
-cartes »).
+Créez votre clé dans TabTree → ⚙️ Réglages → Compte → **Claude connector**, puis :
 
-**Claude Desktop** — double-cliquez `TabTree-Connector.mcpb`. Claude demande le
-dossier à utiliser, et c'est terminé : ni terminal, ni fichier de config, ni
-Node à installer.
+- **Claude Desktop** — double-cliquez `TabTree-Connector.mcpb` et collez la clé.
+- **Claude Code** — `claude mcp add tabtree --scope user -e TABTREE_API_KEY="tt_live_…" -- npx -y tabtree-mcp`
 
-**Claude Code** — `.mcpb` ne s'y applique pas, il lit un fichier de config :
-
-```bash
-node mcp/install.mjs --dir "/chemin/vers/votre/dossier"
-```
-
-Cette voie-là demande Node.js 18 ou plus. Ensuite, demandez par exemple
-« transforme ces notes de réunion en carte mentale » : la carte est écrite dans
-le dossier ; récupérez-la dans l'app par *Mes cartes* → **🛟** → **« Bring maps
-back from this folder… »**. Le dossier visé par le connecteur doit être celui
-que TabTree affiche à côté de son bouton 🛟 : s'ils diffèrent, les cartes sont
-créées et n'apparaissent jamais.
+Pour une carte existante, le connecteur est **hybride** : ajouter ou déplacer des
+cartes, cocher, poser un responsable, des dates, des étiquettes, une estimation,
+un levier Ai4X s'applique tout seul en quelques secondes (⌘Z l'annule) ; renommer,
+réécrire une note ou supprimer vous est d'abord présenté, et rien n'est appliqué
+sans votre clic. Il n'écrase ni ne supprime jamais une carte.
 
 Support : info@ai4x.academy
