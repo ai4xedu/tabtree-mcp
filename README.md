@@ -1,6 +1,6 @@
 # TabTree
 
-**Mind maps and whiteboards in one offline HTML file.**
+**Mind maps, kanban boards and whiteboards — one document, many views, in your account.**
 
 [Live demo — no signup](https://tabtree.app/tabtree-demo.html?embed=1) · [tabtree.app](https://tabtree.app) · [Templates](templates/) · [Claude connector](#claude-connector)
 
@@ -10,57 +10,58 @@
 
 ## What it is
 
-TabTree is a mind-mapping and whiteboard app that fits in **a single HTML file**.
-You double-click it and it runs — offline, with no account, no server and no
-subscription. One document reads six ways: mind map, kanban board, Gantt chart,
-page of notes, spreadsheet or full-screen presentation. Switch views; nothing is
-converted and nothing is lost.
+TabTree is a mind-mapping, kanban and whiteboard app at [tabtree.app](https://tabtree.app).
+One document reads several ways: mind map, kanban board, Gantt chart, calendar, page of
+notes, spreadsheet or full-screen presentation. Switch views; nothing is converted and
+nothing is lost.
 
 | | |
 |---|---|
-| **One file** | The entire app is one HTML file — no install, no build, no dependencies. |
-| **Offline, always** | It runs from `file://`. Nothing leaves your machine. |
-| **Bought once** | No subscription, no account, no telemetry, no expiry. |
-| **83 templates** | Business Model Canvas, Lean Canvas, OKRs, roadmaps, agent specs… [all of them](templates/) |
-| **It leaves the building** | PNG posts, carousel PDFs, MP4 flythroughs, or one `.html` file that carries the app and the map together. |
-| **Claude writes into it** | The connector below is free with every licence. |
+| **Your maps follow your account** | Sign in on your laptop or your phone and your library is there. |
+| **Team spaces** | Invite people into a space: shared maps and boards, live presence, comments, a daily digest. |
+| **Templates** | Business Model Canvas, Lean Canvas, OKRs, roadmaps, agent specs… [browse them](templates/) |
+| **It leaves the building** | PNG posts, carousel PDFs, MP4 flythroughs, or a shared page anyone can read. |
+| **Claude works in it** | The connector below lets Claude read your library and build maps, boards and kanbans in it. |
 
 ## This repository
 
 TabTree itself is a commercial product and its source is not published here.
 **This repository is the public face of it**, and it holds four things that are
-genuinely useful on their own:
+useful on their own:
 
 - **[`mcp/`](mcp/)** — the full source of the Claude connector, free to use, copy,
   redistribute and modify ([its own licence](mcp/LICENSE.md), no attribution required),
   and the same code published to npm as [`tabtree-mcp`](https://www.npmjs.com/package/tabtree-mcp).
-- **[`plugins/tabtree/`](plugins/tabtree/)** — a Claude Code plugin: two facilitation
-  skills that end in a real document, plus the connector. See
+- **[`plugins/tabtree/`](plugins/tabtree/)** — a Claude Code plugin: a facilitation
+  skill that ends in a real document, plus the connector. See
   [Claude Code plugin](#claude-code-plugin) below.
-- **[`templates/`](templates/)** — the 83 template outlines in plain Markdown, each with a
+- **[`templates/`](templates/)** — template outlines in plain Markdown, each with a
   link that opens it live. Paste them into TabTree, or into any outliner.
-- **[`screenshots/`](screenshots/)** — rendered by the real engine, not mocked up.
+- **[`screenshots/`](screenshots/)** — rendered by the real app, not mocked up.
 
-To use the app itself, [try the demo](https://tabtree.app/tabtree-demo.html?embed=1) — it is the whole application, running
-in your browser, with nothing to install.
+To see the app itself, [try the demo](https://tabtree.app/tabtree-demo.html?embed=1) — it runs
+in your browser, with nothing to install and no signup.
 
 <a name="claude-connector"></a>
 
 ## Claude connector
 
-Let Claude read your TabTree library and turn a conversation, a transcript or a
-spec into a real map on your disk. **Local files, no account, nothing uploaded** —
-the connector only ever sees the backup folder you point it at.
+Let Claude read your TabTree library and turn a conversation, a transcript or a spec
+into a real mind map, kanban board or whiteboard — in your account, on every device,
+and in the team spaces you belong to.
 
-**Claude Desktop — double-click, nothing to install.** Download
-[`TabTree-Connector.mcpb`](https://github.com/ai4xedu/tabtree-mcp/releases/latest) and double-click it. Claude
-Desktop ships its own Node, so there is nothing else to install, and it asks you for
-your backup folder in a normal folder picker.
+**1. Get your connector key.** In TabTree: ⚙️ Settings → Account → **Claude connector** →
+*Create a connector key*. It is shown once and starts with `tt_live_`.
 
-**Claude Code, or any MCP client — one line:**
+**2. Claude Desktop — double-click.** Download
+[`TabTree-Connector.mcpb`](https://github.com/ai4xedu/tabtree-mcp/releases/latest) (or from
+[tabtree.app/connector](https://tabtree.app/connector/)) and double-click it. Claude Desktop
+ships its own Node and asks for your key on its install screen.
+
+**Claude Code, or any MCP client:**
 
 ```bash
-npx -y tabtree-mcp
+claude mcp add tabtree --scope user -e TABTREE_API_KEY="tt_live_…" -- npx -y tabtree-mcp
 ```
 
 Or in your client's config:
@@ -70,28 +71,25 @@ Or in your client's config:
   "mcpServers": {
     "tabtree": {
       "command": "npx",
-      "args": [
-        "-y",
-        "tabtree-mcp"
-      ],
-      "env": {
-        "TABTREE_DIR": "/path/to/your/TabTree/backup/folder"
-      }
+      "args": ["-y", "tabtree-mcp"],
+      "env": { "TABTREE_API_KEY": "tt_live_…" }
     }
   }
 }
 ```
 
-Six tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`,
-`create_board`, `propose_changes`. It **only ever writes new files** — it never
-modifies or deletes one of your maps, and `propose_changes` drops a proposal the
-app applies only when you click. Full detail in [`mcp/README.md`](mcp/README.md).
+Eight tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `create_board`
+(with your own images — logos, photos, posters), `create_kanban`, `propose_changes` and
+`harvest`. The connector **never overwrites or deletes a map**. Safe changes to an existing
+map (add a card, move it, tick it, assign it, date it) are applied by TabTree itself while
+it is open, and Cmd+Z undoes them; anything that rewrites or removes what someone wrote is
+shown to you first, as a banner on that map. Full detail in [`mcp/README.md`](mcp/README.md).
 
 <a name="claude-code-plugin"></a>
 
 ## Claude Code plugin
 
-Two skills that do not end in advice — they end in a **document on your disk**.
+A skill that does not end in advice — it ends in a **document in your TabTree account**.
 
 ```bash
 /plugin marketplace add ai4xedu/tabtree-mcp
@@ -100,27 +98,19 @@ Two skills that do not end in advice — they end in a **document on your disk**
 
 | Skill | What it does |
 |---|---|
-| `ma-cartographie-du-travail` | A 15-minute interview that maps how you actually work — your processes, their hours, and where AI gives time back. Ends with the number: hours per week you get back. |
 | `atelier-vision-okr` | Facilitates a team session — vision, mission, pillars, OKRs per department, plan for the year — then writes it as a canvas you can present. |
 
-Both are written in **French**: they were built to run real workshops, and that is the
-language they run in. They read and reply in French; the documents they produce follow
-the map's own language.
+It is written in **French**: it was built to run real workshops, and that is the language
+it runs in. The canvas it produces follows the map's own language.
 
-**One of them needs a folder, the other does not.** `ma-cartographie-du-travail` writes
-nothing — it hands you a readable brief and a JSON block — so it works the moment you
-install it. `atelier-vision-okr` calls the connector to write the canvas, so it needs
-`TABTREE_DIR` pointing at your TabTree backup folder — the one you picked with 🛟 on the
-**My maps** screen:
+The plugin starts the connector, so it needs your connector key in `TABTREE_API_KEY`:
 
 ```bash
-export TABTREE_DIR="/path/to/your/TabTree/backup/folder"
+export TABTREE_API_KEY="tt_live_…"
 ```
 
-There is no auto-discovery: without that variable the connector says so plainly rather
-than guessing a folder. If you only want the connector and not the skills, the
-double-click [`.mcpb` bundle](#claude-connector) is the better route — it asks for the
-folder in a normal picker.
+Without it the connector says so plainly. If you only want the connector and not the
+skill, the double-click [`.mcpb` bundle](#claude-connector) is the simpler route.
 
 ## Screenshots
 
@@ -132,7 +122,7 @@ folder in a normal picker.
 
 ![06-flowchart.png](screenshots/06-flowchart.png)
 
-**A map sent as one `.html` file: your reader double-clicks it, offline, no install.**
+**A shared map, as your reader sees it.**
 
 ![04-reader.png](screenshots/04-reader.png)
 
@@ -146,18 +136,16 @@ folder in a normal picker.
 
 ## Licence
 
-Three different licences, and the distinction matters:
+Different licences, and the distinction matters:
 
 - The **connector** in [`mcp/`](mcp/) is free to use, copy, redistribute and modify,
-  for any purpose, with or without a TabTree licence — see [`mcp/LICENSE.md`](mcp/LICENSE.md).
-  It is given away on purpose.
-- The **skills** in [`plugins/tabtree/`](plugins/tabtree/) are free on the same terms,
+  for any purpose — see [`mcp/LICENSE.md`](mcp/LICENSE.md). It is given away on purpose.
+- The **skill** in [`plugins/tabtree/`](plugins/tabtree/) is free on the same terms,
   commercial workshops included — see
-  [`plugins/tabtree/LICENSE.md`](plugins/tabtree/LICENSE.md). They are a separate
-  licence because the connector's own text says it covers the connector only.
-- The **app** is a commercial product sold at
-  [tabtree.app](https://tabtree.app); its source is **not** in this repository, and its licence
-  does not allow redistribution.
+  [`plugins/tabtree/LICENSE.md`](plugins/tabtree/LICENSE.md). It has a separate licence
+  because the connector's own text says it covers the connector only.
+- The **app** is a commercial service at [tabtree.app](https://tabtree.app); its source is
+  **not** in this repository.
 - The **template outlines** are yours to copy and adapt freely.
 
 ---

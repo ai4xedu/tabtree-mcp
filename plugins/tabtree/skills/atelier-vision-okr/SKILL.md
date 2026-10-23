@@ -111,18 +111,20 @@ Sur un oui, appelle **`mcp__tabtree__create_board`**.
 
 ### Après l'écriture
 
-Le connecteur écrit un **nouveau fichier** dans le dossier 🛟 ; il ne modifie jamais une carte
+Le connecteur crée une **nouvelle carte** dans le compte TabTree ; il ne modifie jamais une carte
 existante. Dis-le comme ça :
 
-> « C'est écrit. Ouvre TabTree : la toile arrive au prochain scan du dossier 🛟 — sinon
-> **♻️ Restaurer**. Vérifie-la, puis **▶ Present** pour la repasser à l'équipe et **📣 Share
-> image** pour l'envoyer. »
+> « C'est écrit. Ouvre TabTree : la toile apparaît dans ta bibliothèque en moins d'une minute,
+> sur tous tes appareils. Vérifie-la, puis **▶ Present** pour la repasser à l'équipe et
+> **📣 Share image** pour l'envoyer. »
 
 Puis propose la suite utile : **rejouer Q1 en kanban** pour le suivre semaine par semaine.
 
 ### Si le connecteur ne répond pas
 
-`TABTREE_DIR` peut pointer sur un dossier renommé ou déplacé — l'app continue de marcher, le
-connecteur non. **Dis-le et arrête-toi là** : ne prétends pas avoir écrit la toile, et ne
+La clé du connecteur (`TABTREE_API_KEY`, `tt_live_…`) peut manquer, avoir été révoquée, ou le
+champ s'être vidé après une réinstallation — l'app continue de marcher, le connecteur non. Le
+message d'erreur du connecteur dit lequel : recopie-le tel quel. La clé se crée dans TabTree →
+Settings → Account → Claude connector. **Dis-le et arrête-toi là** : ne prétends pas avoir écrit la toile, et ne
 propose pas de repli qui fabriquerait un fichier à un endroit que personne ne retrouvera.
 Redonne le contenu de l'atelier dans le chat pour qu'il ne soit pas perdu.

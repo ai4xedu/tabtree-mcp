@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "tabtree",
   "displayName": "TabTree",
-  "version": "1.3.0",
-  "description": "Two facilitation skills that end in a real TabTree document — a work map of where AI gives time back, and a vision/mission/OKR canvas — plus the local connector that writes them to your own disk.",
+  "version": "1.6.1",
+  "description": "A facilitation skill that ends in a real TabTree document — a vision, mission and OKR canvas written to your TabTree account — plus the Claude connector for mind maps, kanban boards and whiteboards.",
   "author": {
     "name": "TabTree",
     "email": "info@tabtree.app",
@@ -15,9 +15,9 @@
   "keywords": [
     "mindmap",
     "whiteboard",
+    "kanban",
     "workshop",
-    "okr",
-    "local-first"
+    "okr"
   ],
   "mcpServers": {
     "tabtree": {
@@ -27,7 +27,7 @@
         "tabtree-mcp"
       ],
       "env": {
-        "TABTREE_DIR": "${TABTREE_DIR}"
+        "TABTREE_API_KEY": "${TABTREE_API_KEY}"
       }
     }
   }

@@ -37,5 +37,5 @@ Meeting — topic — date
 
 ---
 
-Built with [TabTree](https://tabtree.app) — mind maps and whiteboards in one offline HTML file.
-Bought once, no subscription, no account. [Try the live demo](https://tabtree.app/tabtree-demo.html?embed=1).
+Built with [TabTree](https://tabtree.app) — mind maps, kanban boards and whiteboards in your account.
+[Try the live demo](https://tabtree.app/tabtree-demo.html?embed=1) — no signup.

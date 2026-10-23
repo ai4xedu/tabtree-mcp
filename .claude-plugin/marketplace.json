@@ -5,13 +5,13 @@
     "name": "TabTree",
     "email": "info@tabtree.app"
   },
-  "description": "Workshop skills and the local connector for TabTree — mind maps and whiteboards in a single offline HTML file.",
+  "description": "Workshop skill and the Claude connector for TabTree — mind maps, kanban boards and whiteboards in your TabTree account.",
   "plugins": [
     {
       "name": "tabtree",
       "displayName": "TabTree",
       "source": "./plugins/tabtree",
-      "description": "Run a work-mapping interview or a vision/OKR workshop, then write the result as a real TabTree map on your own disk. Local files, no account, nothing uploaded.",
+      "description": "Run a vision/OKR workshop, then write the result as a real TabTree canvas in your account. The connector also builds mind maps, kanban boards and whiteboards — team spaces included.",
       "author": {
         "name": "TabTree",
         "email": "info@tabtree.app"
@@ -23,15 +23,14 @@
         "whiteboard",
         "kanban",
         "workshop",
-        "okr",
-        "local-first"
+        "okr"
       ],
       "category": "Design",
       "tags": [
         "mind-mapping",
         "diagramming",
         "facilitation",
-        "local-first"
+        "project-management"
       ]
     }
   ]

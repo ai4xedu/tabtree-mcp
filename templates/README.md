@@ -1,6 +1,6 @@
 # TabTree templates
 
-83 ready-made templates, each one openable in your browser with no signup.
+Ready-made templates, each one openable in your browser with no signup.
 Every file below carries the exact outline TabTree builds, so you can read it here
 or open it live.
 
@@ -29,9 +29,6 @@ or open it live.
 | [🪄 Claude Skill spec](build/skill.md) | Specify a skill before writing it — trigger wording, procedure, and the prompts that must fire it. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=skill&src=github) |
 | [🎚 System prompt builder](build/sysprompt.md) | Build a system prompt piece by piece — the map IS the prompt, copy it with ⌘C. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=sysprompt&src=github) |
 | [🖌 Design system brief for AI](build/design.md) | Tokens, components and rules — so generated screens look like one product. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=design&src=github) |
-| [🧮 Work map — scoring the processes](build/workmapsheet.md) | Companion of the Work map canvas: one row per process, five scores, and the table says how many hours a month Claude gives back — and where a human must keep signing. Then 🃏 tracks the plan. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmapsheet&src=github) |
-| [🗺️ Work map — where Claude fits in someone's job](build/workmap.md) | For AI coaches. Inventory everything a professional does, filter it through a 2×2, show the week before and after in blocks, and leave with five first steps — each with its lever. Creates its 🧮 companion sheet with it, and re-casts for any other person. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmap&src=github) |
-| [🎓 Ai4X Work Map — where Claude fits, week by week](build/workmapai4x.md) | The work map, plus the Ai4X Claude Bootcamp path: every process lands on the live that unlocks it, Live 0 to Live 6. Re-casts for any other person. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=workmapai4x&src=github) |
 | [🧮 Second brain — the conversation plan](build/secondbrainsheet.md) | Companion of the Second Brain Blueprint: one row per conversation to have with Claude, dated and staged, with the prompt to paste. Tick them off here; 📊 shows the calendar. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=secondbrainsheet&src=github) |
 | [🧠 Second Brain Blueprint — design it, then let Claude build it](build/secondbrain.md) | Premium. Describe your lives, what you keep losing and where your notes live — or let Claude interview you. The canvas derives your whole vault: three layers, every folder and file, where each loss will live, and the conversations to have with Claude. Validate it here; the companion skill builds it on your disk. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=secondbrain&src=github) |
 | [🎓 Ai4X Second Brain Blueprint — design it, then let Claude build it](build/secondbrainai4x.md) | Premium. The Second Brain Blueprint, carrying the Ai4X method: the three-layer vault we run our own companies with. Describe your lives and what you keep losing — the canvas derives your whole vault, and the skill builds it on your disk. | [▶](https://tabtree.app/tabtree-demo.html?embed=1&tpl=secondbrainai4x&src=github) |
