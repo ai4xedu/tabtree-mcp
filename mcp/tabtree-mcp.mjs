@@ -79,6 +79,28 @@ const REQ = new AsyncLocalStorage();
 const GLOBAL_CTX = { key: "", spaces: null, me: null };
 function reqCtx(){ return REQ.getStore() || GLOBAL_CTX; }
 function curKey(){ const st = REQ.getStore(); return st ? st.key : API_KEY; }
+// 🏷 QUI SIGNE UNE PROPOSITION (2026-11-02, rapporté : un commentaire écrit depuis ChatGPT était signé « Claude »).
+// Le nom de l'app qui appelle : hébergé, celui de SA clé (« ChatGPT (connected) », posé à l'autorisation OAuth) ;
+// en local, le `clientInfo.name` de l'`initialize`. Une clé faite à la main porte un nom choisi par la personne
+// (« Laptop ») : ce n'est pas un nom d'app, on garde « Claude », comme avant. Une app inconnue est marquée « (app) » :
+// le nom vient de l'app elle-même, et il ne doit pas pouvoir se faire passer pour un coéquipier dans un fil.
+const APP_NAMES = [[/chat\s*gpt|openai/i, "ChatGPT"], [/claude/i, "Claude"], [/cursor/i, "Cursor"], [/opencode/i, "OpenCode"],
+  [/codex/i, "Codex"], [/gemini/i, "Gemini"], [/windsurf|codeium/i, "Windsurf"], [/\bzed\b/i, "Zed"], [/\bgoose\b/i, "Goose"],
+  [/hermes/i, "Hermes"], [/vs\s*code|visual studio code|copilot/i, "VS Code"]];
+export function appLabel(raw){
+  const s = String(raw == null ? "" : raw).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  if(!s) return "";
+  for(const [re, name] of APP_NAMES) if(re.test(s)) return name;
+  const clean = s.replace(/[^\p{L}\p{N} ._-]+/gu, "").replace(/\s+/g, " ").trim().slice(0, 30);
+  return clean ? clean + " (app)" : "";
+}
+export function hostedAppOf(keyName){
+  const m = /^(.*) \(connected\)$/.exec(String(keyName == null ? "" : keyName));
+  if(!m) return "";
+  return m[1].trim() === "An app" ? "An app" : appLabel(m[1]);
+}
+let LOCAL_APP = "";
+function proposalBy(){ const st = REQ.getStore(); return (st ? st.app : LOCAL_APP) || "Claude"; }
 if(!KEY_SHAPE.test(API_KEY) && KEY_FALLBACK) API_KEY = KEY_FALLBACK;
 const API_URL = String(process.env.TABTREE_API_URL || "https://aynmiptyvisxoslzkzxn.supabase.co/functions/v1/mcp").trim();
 const CLOUD = !!API_KEY || HOSTED;   // hébergé : la source est toujours le compte de la requête
@@ -2437,7 +2459,7 @@ async function writeProposal(map, note, ops, opts){
   const o = opts || {};
   const payload = (id, list, auto)=>Object.assign({
     v: 1, kind: "tabtree-proposal", mapId: id, mapFile: CLOUD ? map.file : basename(map.file), mapName: map.name,
-    createdAt: Date.now(), by: "Claude", note: String(note||"").slice(0, 2000), ops: list
+    createdAt: Date.now(), by: proposalBy(), note: String(note||"").slice(0, 2000), ops: list
   }, auto ? { auto: true } : {}, o.extra || {});
   const shots = ops.filter(x=>(x.op === "img" && x.img) || x.op === "bimg").length;
   if(!CLOUD && JSON.stringify(payload("x", ops)).length > PROP_FILE_MAX)
@@ -4527,6 +4549,9 @@ function handle(msg, out = send){
   const reply = (id, result)=>out({ jsonrpc:"2.0", id, result });
   const { id, method, params } = msg;
   if(method === "initialize"){
+    // 🏷 En local, le processus sert UNE app pour toute sa vie : son nom signe ses propositions. Hébergé, chaque
+    // requête est seule (`REQ`), et c'est le nom de la clé qui signe — jamais une globale partagée entre comptes.
+    if(!REQ.getStore()) LOCAL_APP = appLabel(params && params.clientInfo && params.clientInfo.name);
     reply(id, {
       protocolVersion: (params && params.protocolVersion) || "2024-11-05",
       capabilities: { tools: {} },
@@ -4535,7 +4560,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.18.0" }
+      serverInfo: { name: "tabtree", version: "1.18.1" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -4561,9 +4586,9 @@ function handle(msg, out = send){
 
 // 🌐 La porte du connecteur HÉBERGÉ : UN message JSON-RPC, la clé de la requête, la réponse (ou `null` pour une
 // notification). Tout ce qui suit — outils, appels au compte, caches — tourne dans le contexte de CETTE requête.
-export function handleHosted(msg, key){
+export function handleHosted(msg, key, keyName){
   return new Promise((done)=>{
-    REQ.run({ key: String(key || ""), spaces: null, me: null }, ()=>{
+    REQ.run({ key: String(key || ""), spaces: null, me: null, app: hostedAppOf(keyName) }, ()=>{
       if(!msg || typeof msg !== "object" || msg.id === undefined || msg.id === null){
         try{ handle(msg || {}, ()=>{}); }catch(e){}
         done(null);
