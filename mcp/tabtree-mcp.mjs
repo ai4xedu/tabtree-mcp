@@ -30,6 +30,7 @@ import { BlockList, isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns";
 import { inflateSync, deflateSync } from "node:zlib";
 import { tmpdir, platform } from "node:os";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 // ⚠️ LE GABARIT NON RÉSOLU vaut « vide », pour le dossier comme pour la clé (2026-10-20). Claude
 // Desktop passe `${user_config.backup_folder}` TEL QUEL quand le champ (ancien, Classic) est vide :
@@ -67,16 +68,29 @@ let API_KEY = keySent(KEY_FIELD);
 // ne sert que si le premier n'a rien donné de valable. `required:true` sur le premier ne réglerait
 // rien : Desktop ne lancerait plus du tout le connecteur, sans un message.
 const KEY_UNSENT = !API_KEY && !KEY_FALLBACK && !!KEY_FIELD;
+// 🌐 LE CONNECTEUR HÉBERGÉ (2026-11-02, docs/superpowers/specs/2026-11-02-hosted-mcp-design.md). La MÊME source sert
+// `tabtree.app/mcp` (edge function `mcp-http`) : un processus, plusieurs comptes à la fois. Ce qui était global à un
+// processus (la clé, les espaces et le compte vus au dernier chargement) vit alors dans un CONTEXTE PAR REQUÊTE
+// (`REQ`, AsyncLocalStorage — que Deno fournit aussi) : sans lui, la requête d'un compte lirait la clé ou les espaces
+// d'un autre, servie au même instant par la même instance. Hors hébergement, le contexte global garde le comportement d'avant.
+// Le drapeau global vient de l'edge function `mcp-http` (son environnement est en lecture seule) ; la variable sert les tests.
+const HOSTED = globalThis.__TABTREE_HOSTED === true || String(process.env.TABTREE_HOSTED || "") === "1";
+const REQ = new AsyncLocalStorage();
+const GLOBAL_CTX = { key: "", spaces: null, me: null };
+function reqCtx(){ return REQ.getStore() || GLOBAL_CTX; }
+function curKey(){ const st = REQ.getStore(); return st ? st.key : API_KEY; }
 if(!KEY_SHAPE.test(API_KEY) && KEY_FALLBACK) API_KEY = KEY_FALLBACK;
 const API_URL = String(process.env.TABTREE_API_URL || "https://aynmiptyvisxoslzkzxn.supabase.co/functions/v1/mcp").trim();
-const CLOUD = !!API_KEY;
+const CLOUD = !!API_KEY || HOSTED;   // hébergé : la source est toujours le compte de la requête
 // La FORME d'une clé se vérifie ici, avant tout aller-retour : l'app en fabrique une en
 // `tt_live_` + 43 caractères base64url (`connKeyMaterial`). Une valeur qui n'y ressemble pas est
 // une faute de copie ou un champ mal rempli — le dire tout de suite nomme la bonne cause, et
 // évite d'aller faire dire au serveur quelque chose qu'il ne sait pas.
 const API_KEY_OK = KEY_SHAPE.test(API_KEY);
 async function cloudCall(action, body){
-  if(!API_KEY_OK) throw new Error(
+  const KEY = curKey();
+  if(HOSTED && !KEY_SHAPE.test(KEY)) throw new Error("This request carries no TabTree connector key.");
+  if(!KEY_SHAPE.test(KEY)) throw new Error(
     "TABTREE_API_KEY does not look like a connector key — it must start with \"tt_live_\". "
   + "If you just reinstalled the connector, its settings were reset: open TabTree → \u2699\ufe0f Settings "
   + "\u2192 Account \u2192 Claude connector, create a key, paste it into the connector's settings, "
@@ -84,7 +98,7 @@ async function cloudCall(action, body){
   let r;
   try{
     r = await fetch(API_URL, { method:"POST",
-      headers:{ "content-type":"application/json", "x-tabtree-key": API_KEY },
+      headers:{ "content-type":"application/json", "x-tabtree-key": KEY },
       // `v: 2` : le contrat 1.5.0 (espaces d'équipe, propriétaire de chaque carte, pagination).
       // Une edge function plus ancienne l'ignore ; une plus récente sert les 1.2–1.4 sans `v` à l'identique.
       body: JSON.stringify(Object.assign({ action, v: 2 }, body || {})) });
@@ -435,6 +449,8 @@ function readImageSpec(spec, where){
     return { buf: Buffer.from(m[2].replace(/\s+/g, ""), "base64"), label: "inline image" };
   }
   if(typeof spec.file === "string" && spec.file.trim()){
+    // ⚠️ HÉBERGÉ, UN CHEMIN EST CELUI DU SERVEUR : jamais lu (il donnerait le disque de la fonction à qui le demande).
+    if(HOSTED) throw new Error(`${where}: the hosted TabTree connector cannot read a file path — give \`url\` (an https address of the image) or \`data\` (a data:image/… URL).`);
     const p = resolve(spec.file.trim());
     if(!existsSync(p)) throw new Error(`${where}: no file at ${p}. Save the screenshot to disk first (a PNG), then pass its full path.`);
     const st = statSync(p);
@@ -527,6 +543,7 @@ function boardImageFrom(spec, where){
     return { src: "data:image/svg+xml;base64," + Buffer.from(txt, "utf8").toString("base64"), ...svgSize(txt), note: `inline SVG kept as is` };
   }
   if(spec && typeof spec.file === "string" && spec.file.trim()){
+    if(HOSTED) throw new Error(`${where}: the hosted TabTree connector cannot read a file path — give \`url\` (an https address of the image) or \`data\` (a data:image/… URL).`);
     const p = resolve(spec.file.trim());
     if(existsSync(p) && statSync(p).isFile() && statSync(p).size <= IMG_FILE_MAX){
       const raw = readFileSync(p);
@@ -1349,8 +1366,8 @@ function teamLocalId(owner, key){
   if(!/^[0-9a-f]{10}$/.test(t) || !/^[A-Za-z0-9_]{1,52}$/.test(String(key || ""))) return null;
   return "T" + t + "_" + key;
 }
-let cloudSpacesCache = null;   // les espaces vus au dernier chargement — la création les résout par nom
-let cloudMe = null;            // le compte de la clé, vu au dernier chargement — la récolte en a besoin pour « Personal »
+// Les espaces et le compte vus au dernier chargement — la création résout un espace par nom, la récolte a besoin du compte
+// pour « Personal ». ⚠️ PAR REQUÊTE quand le connecteur est hébergé (`reqCtx()`) : un cache global y mélangerait les comptes.
 async function cloudLibrary(){
   const pages = [];
   let total = Infinity, off = 0, j = null;
@@ -1363,9 +1380,9 @@ async function cloudLibrary(){
     off += got.length;
   }
   const me = (j && j.me) || null;
-  cloudMe = me;
-  cloudSpacesCache = (j && j.spaces) || [];
-  const spaceName = (owner, key)=>{ const sp = cloudSpacesCache.find(x=>x.owner === owner && x.space_key === key); return sp ? sp.name : null; };
+  reqCtx().me = me;
+  reqCtx().spaces = (j && j.spaces) || [];
+  const spaceName = (owner, key)=>{ const sp = reqCtx().spaces.find(x=>x.owner === owner && x.space_key === key); return sp ? sp.name : null; };
   const folders = new Map((j && j.folders || []).filter(f=>f && f.folder_key).map(f=>[(f.owner || "") + "|" + f.folder_key, f]));
   const pathOf = (owner, k)=>{
     const out = [], seen = new Set();
@@ -3572,7 +3589,7 @@ function cpContext(m, lib, card, opts){
   const src = knowSourceOf(card.chain);
   let kOwner = m.owner, kSpace = m.spaceKey || null, gone = false;
   if(src){
-    const hits = (cloudSpacesCache || []).filter(x=>knowKey(x.name) === knowKey(src.label));
+    const hits = (reqCtx().spaces || []).filter(x=>knowKey(x.name) === knowKey(src.label));
     const sp = hits.find(x=>x.owner === m.owner) || hits[0];
     if(sp){ kOwner = sp.owner; kSpace = sp.space_key; } else gone = true;
   }
@@ -3583,7 +3600,7 @@ function cpContext(m, lib, card, opts){
   if(/^https?:\/\//i.test(L)) link = { url: L };
   else { const mm = /^map:([A-Za-z0-9_]+)/.exec(L); const t = mm && lib.find(x=>x.file === mm[1] || x.key === mm[1]); if(t) link = { name: t.name || "Untitled" }; }
   const rules = okRules(doc.rules).map(t=>({ t, from:"map" }));
-  const sp = (cloudSpacesCache || []).find(x=>x.owner === m.owner && x.space_key === (m.spaceKey || null));
+  const sp = (reqCtx().spaces || []).find(x=>x.owner === m.owner && x.space_key === (m.spaceKey || null));
   if(sp && Array.isArray(sp.rules)) okRules(sp.rules).forEach(t=>rules.push({ t, from:"team" }));
   // 📖 Les passages des autres cartes de la MÊME portée (jamais un autre espace), comme `cardPromptPassages`.
   // Par le FICHIER, jamais par l'objet : `findMap` et ce chargement-ci lisent la bibliothèque chacun de leur côté — la carte
@@ -3926,6 +3943,31 @@ const TOOLS = [
   }
 ];
 
+// 🏷 LES ANNOTATIONS DES OUTILS (1.18.0, 2026-11-02) — l'annuaire des connecteurs d'Anthropic les EXIGE (un `title` et
+// `readOnlyHint` ou `destructiveHint` par outil), ChatGPT les lit pour décider quand demander confirmation. UNE table, appliquée
+// à la liste : un outil ajouté sans sa ligne fait échouer le test du connecteur.
+// `destructiveHint` est FAUX partout, et c'est vrai : ce qui réécrit ou retire ce qu'un humain a écrit (renommer, une note,
+// supprimer) n'est jamais appliqué par l'outil — c'est une PROPOSITION que l'utilisateur approuve dans TabTree ; ce qui s'applique
+// seul ajoute, déplace, coche, date ou étiquette. `openWorldHint` est vrai là où une image peut être téléchargée par son adresse.
+const TOOL_ANNOTATIONS = {
+  list_maps:       { title: "List maps",                           readOnlyHint: true,  openWorldHint: false },
+  read_map:        { title: "Read a map",                          readOnlyHint: true,  openWorldHint: false },
+  search_maps:     { title: "Search maps",                         readOnlyHint: true,  openWorldHint: false },
+  card_prompt:     { title: "Get a card's prompt",                 readOnlyHint: true,  openWorldHint: false },
+  create_mindmap:  { title: "Create a mind map",                   readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  plant_project:   { title: "Plant a project as a tree",           readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  create_board:    { title: "Create a whiteboard",                 readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  create_kanban:   { title: "Create a kanban board",               readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  propose_changes: { title: "Change a map (safe changes apply, others wait for review)", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  harvest:         { title: "Keep what matters from this conversation", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  fill_knowledge:  { title: "Fill the company knowledge base",     readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  deliver_card:    { title: "Deliver work on a card",              readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+};
+for(const t of TOOLS){
+  const an = TOOL_ANNOTATIONS[t.name];
+  if(an){ t.title = an.title; t.annotations = Object.assign({}, an); }
+}
+
 const HANDLERS = {
   async list_maps(){
     const maps = await loadLibrary();
@@ -3935,8 +3977,8 @@ const HANDLERS = {
     );
     // Les espaces où Claude peut créer (`space` des outils de création) — y compris ceux qui sont VIDES,
     // qu'aucune carte ne ferait apparaître dans la liste.
-    const sps = CLOUD && cloudSpacesCache && cloudSpacesCache.length
-      ? "\n\nSpaces: " + cloudSpacesCache.map(x=>"“" + x.name + "”" + (x.role !== "owner" ? " (team, " + x.role + (x.writable ? "" : ", read-only") + ")" : "")).join(", ")
+    const sps = CLOUD && reqCtx().spaces && reqCtx().spaces.length
+      ? "\n\nSpaces: " + reqCtx().spaces.map(x=>"“" + x.name + "”" + (x.role !== "owner" ? " (team, " + x.role + (x.writable ? "" : ", read-only") + ")" : "")).join(", ")
       : "";
     return lines.join("\n") + sps;
   },
@@ -4174,11 +4216,11 @@ const HANDLERS = {
 
     // 2. L'espace, puis les deux cartes (sans rien créer encore).
     const lib = await loadLibrary();
-    const me = cloudMe;
+    const me = reqCtx().me;
     let sp = null;
     if(a.space != null && String(a.space).trim()){
-      const hits = (cloudSpacesCache || []).filter(x=>hvSame(x.name, a.space));
-      if(!hits.length) throw new Error("No space named “" + a.space + "” in this account" + ((cloudSpacesCache || []).length ? ". Spaces: " + cloudSpacesCache.map(x=>"“" + x.name + "”").join(", ") + " — or omit `space` for Personal" : "") + ".");
+      const hits = (reqCtx().spaces || []).filter(x=>hvSame(x.name, a.space));
+      if(!hits.length) throw new Error("No space named “" + a.space + "” in this account" + ((reqCtx().spaces || []).length ? ". Spaces: " + reqCtx().spaces.map(x=>"“" + x.name + "”").join(", ") + " — or omit `space` for Personal" : "") + ".");
       sp = hits.find(x=>x.owner === me) || hits[0];
       if(!sp.writable) throw new Error("The space “" + sp.name + "” is read-only for this user (" + (sp.role === "viewer" ? "their role there is viewer — ask its owner for the editor role" : "its owner's plan has ended") + "). Nothing was filed.");
     }
@@ -4317,11 +4359,11 @@ const HANDLERS = {
 
     // 2. L'espace, puis LA carte de connaissance (sans rien créer encore).
     const lib = await loadLibrary();
-    const me = cloudMe;
+    const me = reqCtx().me;
     let sp = null;
     if(a.space != null && String(a.space).trim()){
-      const hits = (cloudSpacesCache || []).filter(x=>hvSame(x.name, a.space));
-      if(!hits.length) throw new Error("No space named “" + a.space + "” in this account" + ((cloudSpacesCache || []).length ? ". Spaces: " + cloudSpacesCache.map(x=>"“" + x.name + "”").join(", ") + " — or omit `space` for Personal" : "") + ".");
+      const hits = (reqCtx().spaces || []).filter(x=>hvSame(x.name, a.space));
+      if(!hits.length) throw new Error("No space named “" + a.space + "” in this account" + ((reqCtx().spaces || []).length ? ". Spaces: " + reqCtx().spaces.map(x=>"“" + x.name + "”").join(", ") + " — or omit `space` for Personal" : "") + ".");
       sp = hits.find(x=>x.owner === me) || hits[0];
       if(!sp.writable) throw new Error("The space “" + sp.name + "” is read-only for this user (" + (sp.role === "viewer" ? "their role there is viewer — ask its owner for the editor role" : "its owner's plan has ended") + "). Nothing was written.");
     }
@@ -4478,10 +4520,11 @@ const HANDLERS = {
 // Boucle JSON-RPC (stdio, un message par ligne)
 // ---------------------------------------------------------------------------
 function send(obj){ process.stdout.write(JSON.stringify(obj) + "\n"); }
-function reply(id, result){ send({ jsonrpc:"2.0", id, result }); }
-function replyErr(id, code, message){ send({ jsonrpc:"2.0", id, error:{ code, message } }); }
+function replyErr(id, code, message, out = send){ out({ jsonrpc:"2.0", id, error:{ code, message } }); }
 
-function handle(msg){
+// `out` reçoit la réponse : la sortie standard en local, la réponse HTTP quand le connecteur est hébergé.
+function handle(msg, out = send){
+  const reply = (id, result)=>out({ jsonrpc:"2.0", id, result });
   const { id, method, params } = msg;
   if(method === "initialize"){
     reply(id, {
@@ -4492,7 +4535,7 @@ function handle(msg){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.16.0" }
+      serverInfo: { name: "tabtree", version: "1.18.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -4503,7 +4546,7 @@ function handle(msg){
   } else if(method === "tools/call"){
     const name = params && params.name;
     const fn = HANDLERS[name];
-    if(!fn){ replyErr(id, -32602, "Outil inconnu : " + name); return; }
+    if(!fn){ replyErr(id, -32602, "Outil inconnu : " + name, out); return; }
     // Les gestionnaires sont ASYNCHRONES depuis la source cloud (2026-09-08) : un `fn` qui
     // lève ou qui rejette rend le même message d'erreur — Claude n'a pas à distinguer les deux.
     Promise.resolve().then(()=>fn((params && params.arguments) || {})).then(text=>{
@@ -4512,8 +4555,23 @@ function handle(msg){
       reply(id, { content: [{ type:"text", text: "Erreur : " + (e && e.message || e) }], isError: true });
     });
   } else if(id !== undefined){
-    replyErr(id, -32601, "Méthode non supportée : " + method);
+    replyErr(id, -32601, "Méthode non supportée : " + method, out);
   }
+}
+
+// 🌐 La porte du connecteur HÉBERGÉ : UN message JSON-RPC, la clé de la requête, la réponse (ou `null` pour une
+// notification). Tout ce qui suit — outils, appels au compte, caches — tourne dans le contexte de CETTE requête.
+export function handleHosted(msg, key){
+  return new Promise((done)=>{
+    REQ.run({ key: String(key || ""), spaces: null, me: null }, ()=>{
+      if(!msg || typeof msg !== "object" || msg.id === undefined || msg.id === null){
+        try{ handle(msg || {}, ()=>{}); }catch(e){}
+        done(null);
+        return;
+      }
+      try{ handle(msg, done); }catch(e){ done({ jsonrpc:"2.0", id: msg.id, error:{ code: -32603, message: String((e && e.message) || e).slice(0, 300) } }); }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -4790,8 +4848,9 @@ function ttHook(event){
   });
 }
 
-const TT_MODE = process.argv[2];
-if(TT_MODE === "--plugin") ttPlugin(process.argv.slice(3));
+const TT_MODE = HOSTED ? "--hosted" : process.argv[2];
+if(TT_MODE === "--hosted"){ /* importé par l'edge function : aucune entrée standard, aucune commande */ }
+else if(TT_MODE === "--plugin") ttPlugin(process.argv.slice(3));
 else if(TT_MODE === "--hook") ttHook(process.argv[3]);
 else {
   let buf = "";

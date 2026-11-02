@@ -59,6 +59,10 @@ and in the team spaces you belong to.
 [tabtree.app/connector](https://tabtree.app/connector/)) and double-click it. Claude Desktop
 ships its own Node and asks for your key on its install screen.
 
+**No install — claude.ai, ChatGPT, Cursor:** connect by address, `https://tabtree.app/mcp`.
+The app opens a TabTree page where you sign in and press Allow: no key to copy. In claude.ai:
+Settings → Connectors → Add custom connector, then paste the address.
+
 **Claude Code, or any MCP client:**
 
 ```bash
