@@ -1,19 +1,33 @@
-# TabTree skills — Licence
+# TabTree Connector — Licence
 
-This licence covers **the skill in this plugin only** — `atelier-vision-okr`,
-with its reference files. It does not cover the
-TabTree application itself, and it is not the connector's licence
-([`mcp/LICENSE.md`](../../mcp/LICENSE.md), which covers `tabtree-mcp` and states so).
+This licence covers **the connector only** — the `tabtree-mcp` package and the
+`tabtree-mcp.mjs` server file it contains. It does not cover the TabTree
+application itself.
 
-## The skill
+## The connector
 
-Free to use, copy, redistribute, modify and run in commercial workshops, with or
-without a TabTree licence. No attribution required, no fee, no registration.
+Free to use, copy, redistribute and modify, for any purpose, personal or
+commercial, with or without a TabTree licence. No attribution required, no fee,
+no registration.
 
-It is given away for the connector's reason: it ends in a TabTree document, so
-it is worth something to you only if you have TabTree to open it with. There is
-nothing to gain by locking them up and a great deal to gain by letting them travel.
+It is given away on purpose. The connector reads and writes files in a folder
+you choose; it is worth something to you only if you also have TabTree to open
+those files with, so there is nothing to gain by locking it up and a great deal
+to gain by letting it travel.
 
-Provided **as is**, without warranty of any kind. The authors are not liable for any
-claim or damage arising from their use — including any decision taken during or after
-a workshop they facilitated.
+Provided **as is**, without warranty of any kind. The authors are not liable for
+any claim or damage arising from its use.
+
+## The TabTree application
+
+`TabTree.html` — the app you bought — is **separately licensed**, and that
+licence is the one shipped with it (`LICENCE.txt`). In short: personal, for life,
+all your own devices, and **not** to be resold, published for download or passed
+to people who have not bought a licence. Team use needs the Teams plan.
+
+Copying this file, or the `tabtree-mcp` package, grants no right whatsoever over
+the application.
+
+---
+
+TabTree — https://tabtree.app/ — info@ai4x.academy

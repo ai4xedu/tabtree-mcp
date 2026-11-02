@@ -1,0 +1,3 @@
+#!/bin/sh
+# Lance le mode local du connecteur embarqué. Il n'utilise ni clé ni réseau.
+exec node "$(dirname "$0")/../server/tabtree-mcp.mjs" --plugin "$@"

@@ -5,13 +5,13 @@
     "name": "TabTree",
     "email": "info@tabtree.app"
   },
-  "description": "Workshop skill and the Claude connector for TabTree — mind maps, kanban boards and whiteboards in your TabTree account.",
+  "description": "The Claude connector for TabTree — mind maps, kanban boards and whiteboards in your TabTree account — and the Claude Code plugin that ties a coding session to one card of a board.",
   "plugins": [
     {
       "name": "tabtree",
       "displayName": "TabTree",
       "source": "./plugins/tabtree",
-      "description": "Run a vision/OKR workshop, then write the result as a real TabTree canvas in your account. The connector also builds mind maps, kanban boards and whiteboards — team spaces included.",
+      "description": "Ties a Claude Code session to one TabTree card: Claude knows what it is working on, even after /clear, and your commits land on the card. Ships the connector (twelve tools, team spaces included) and a vision/OKR workshop skill.",
       "author": {
         "name": "TabTree",
         "email": "info@tabtree.app"
@@ -20,18 +20,20 @@
       "repository": "https://github.com/ai4xedu/tabtree-mcp",
       "keywords": [
         "mindmap",
-        "whiteboard",
         "kanban",
+        "whiteboard",
+        "claude-code",
         "workshop",
         "okr"
       ],
       "category": "Design",
       "tags": [
         "mind-mapping",
+        "project-management",
         "diagramming",
-        "facilitation",
-        "project-management"
-      ]
+        "facilitation"
+      ],
+      "version": "1.14.0"
     }
   ]
 }

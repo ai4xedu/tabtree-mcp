@@ -32,8 +32,9 @@ useful on their own:
 - **[`mcp/`](mcp/)** — the full source of the Claude connector, free to use, copy,
   redistribute and modify ([its own licence](mcp/LICENSE.md), no attribution required),
   and the same code published to npm as [`tabtree-mcp`](https://www.npmjs.com/package/tabtree-mcp).
-- **[`plugins/tabtree/`](plugins/tabtree/)** — a Claude Code plugin: a facilitation
-  skill that ends in a real document, plus the connector. See
+- **[`plugins/tabtree/`](plugins/tabtree/)** — the Claude Code plugin: it ties a coding
+  session to one card of a board (your commits land on it), ships the connector, and adds a
+  facilitation skill that ends in a real document. See
   [Claude Code plugin](#claude-code-plugin) below.
 - **[`templates/`](templates/)** — template outlines in plain Markdown, each with a
   link that opens it live. Paste them into TabTree, or into any outliner.
@@ -78,39 +79,46 @@ Or in your client's config:
 }
 ```
 
-Eight tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `create_board`
-(with your own images — logos, photos, posters), `create_kanban`, `propose_changes` and
-`harvest`. The connector **never overwrites or deletes a map**. Safe changes to an existing
-map (add a card, move it, tick it, assign it, date it) are applied by TabTree itself while
-it is open, and Cmd+Z undoes them; anything that rewrites or removes what someone wrote is
-shown to you first, as a banner on that map. Full detail in [`mcp/README.md`](mcp/README.md).
+Twelve tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
+(a brief becomes a tree — roots, branches, birds), `create_kanban`, `create_board` (with
+your own images, and tables), `propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`
+and `deliver_card`. The connector **never overwrites or deletes a map**. Safe changes to an
+existing map (add a card, move it, tick it, assign it, date it, comment on it) are applied by
+TabTree itself while it is open, and Cmd+Z undoes them; anything that rewrites or removes
+what someone wrote is shown to you first, as a banner on that map. Full detail in
+[`mcp/README.md`](mcp/README.md).
 
 <a name="claude-code-plugin"></a>
 
 ## Claude Code plugin
 
-A skill that does not end in advice — it ends in a **document in your TabTree account**.
+Ties a Claude Code session to **one card of a TabTree board**. Claude knows which card it is
+working on — even after `/clear` — and your commits land on that card as a comment, without
+you writing anything.
 
 ```bash
-/plugin marketplace add ai4xedu/tabtree-mcp
-/plugin install tabtree@tabtree
+claude plugin marketplace add ai4xedu/tabtree-mcp
+claude plugin install tabtree@tabtree
+claude plugin configure tabtree
 ```
 
-| Skill | What it does |
+The third command asks for your connector key (`tt_live_…`, from TabTree → ⚙️ Settings →
+Account → Claude connector). The key is kept by Claude Code, never written into a file of
+your repository.
+
+| Command | What it does |
 |---|---|
-| `atelier-vision-okr` | Facilitates a team session — vision, mission, pillars, OKRs per department, plan for the year — then writes it as a canvas you can present. |
+| `/tabtree:link` | Links this git repository to one board — writes `.tabtree.json` (the board's id, no secret), so teammates share the link. |
+| `/tabtree:next` | Picks the card to work on next, reads its brief, moves it to the in-progress column. |
+| `/tabtree:status` | Says which board and card this session is tied to. |
+| `/tabtree:done` | Writes the deliverable onto the card, for your approval in TabTree. |
+| `atelier-vision-okr` | Facilitates a vision / mission / OKR session — in French, the language it was built to run workshops in — and writes the result as a canvas you can present. |
 
-It is written in **French**: it was built to run real workshops, and that is the language
-it runs in. The canvas it produces follows the map's own language.
-
-The plugin starts the connector, so it needs your connector key in `TABTREE_API_KEY`:
-
-```bash
-export TABTREE_API_KEY="tt_live_…"
-```
-
-Without it the connector says so plainly. If you only want the connector and not the
-skill, the double-click [`.mcpb` bundle](#claude-connector) is the simpler route.
+Once a repository is linked, each session starts with a one-paragraph summary of the board
+and the current card, and the commits made during a session become one comment on the card:
+hash, subject and branch — never a diff, a file or a secret. A hook never blocks a session:
+when TabTree does not answer, Claude goes on without it. The connector itself ships inside the
+plugin (the same `tabtree-mcp.mjs` as on npm), so the twelve tools above are in the session.
 
 ## Screenshots
 
@@ -140,10 +148,10 @@ Different licences, and the distinction matters:
 
 - The **connector** in [`mcp/`](mcp/) is free to use, copy, redistribute and modify,
   for any purpose — see [`mcp/LICENSE.md`](mcp/LICENSE.md). It is given away on purpose.
-- The **skill** in [`plugins/tabtree/`](plugins/tabtree/) is free on the same terms,
-  commercial workshops included — see
-  [`plugins/tabtree/LICENSE.md`](plugins/tabtree/LICENSE.md). It has a separate licence
-  because the connector's own text says it covers the connector only.
+- The **plugin** in [`plugins/tabtree/`](plugins/tabtree/) carries the connector's licence
+  file, and the workshop skill keeps its own
+  ([`plugins/tabtree/skills/atelier-vision-okr/LICENSE.md`](plugins/tabtree/skills/atelier-vision-okr/LICENSE.md)):
+  free on the same terms, commercial workshops included. Each text names what it covers.
 - The **app** is a commercial service at [tabtree.app](https://tabtree.app); its source is
   **not** in this repository.
 - The **template outlines** are yours to copy and adapt freely.

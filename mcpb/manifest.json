@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "tabtree",
   "display_name": "TabTree",
-  "version": "1.6.1",
+  "version": "1.14.0",
   "description": "Read your TabTree library and build mind maps, kanban boards and whiteboards from a conversation.",
   "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"make a kanban for the launch with these tasks\" or \"draw our database schema as a board\", and the result appears in your TabTree account — on your laptop and your phone, and in your team spaces for every member.\n\nAsk it to \"add these three tasks to the sprint board, for Sara, due Friday\" and they appear on the board by themselves within seconds, while TabTree is open — Cmd+Z undoes them. Changes that rewrite or remove what someone wrote (renaming, deleting, rewriting a note) are shown to you first, as a banner on that map: you tick what you want and apply it.\n\nTo connect: paste your connector key below. Create it in TabTree → Settings → Account → Claude connector.\n\nThe connector never overwrites or deletes a map, and never touches your browser storage.",
   "author": {
@@ -35,7 +35,8 @@
       ],
       "env": {
         "TABTREE_DIR": "${user_config.backup_folder}",
-        "TABTREE_API_KEY": "${user_config.api_key}"
+        "TABTREE_API_KEY": "${user_config.api_key}",
+        "TABTREE_API_KEY_FALLBACK": "${user_config.api_key_fallback}"
       }
     }
   },
@@ -54,7 +55,11 @@
     },
     {
       "name": "create_mindmap",
-      "description": "Creates a new mind map from a markdown outline — with screenshots on nodes if you pass image files."
+      "description": "Creates a new mind map from a markdown outline — or a project (vision, objectives, epics as bets, a kanban) with format \"projet\" — with screenshots on nodes if you pass image files."
+    },
+    {
+      "name": "plant_project",
+      "description": "“Plant me the project”: turns a brief into a living tree — roots (why, risks), branches, tasks with owners and dates — and tells you which tree your project is."
     },
     {
       "name": "create_board",
@@ -71,6 +76,18 @@
     {
       "name": "harvest",
       "description": "Keeps what matters from a conversation — facts, decisions, lessons — in your Company knowledge and Lessons maps, after you accept it in TabTree."
+    },
+    {
+      "name": "fill_knowledge",
+      "description": "Fills your knowledge base — projects, products, topics, clients, people, brands, partners — with a definition each, applied in TabTree with one click."
+    },
+    {
+      "name": "card_prompt",
+      "description": "Reads one card of a kanban and returns the prompt TabTree's 🪄 builds for it — role, context from your knowledge base, task, guardrails, format."
+    },
+    {
+      "name": "deliver_card",
+      "description": "Sends Claude's finished work back onto that card — a result, next steps, a column — waiting for your approval in TabTree."
     }
   ],
   "user_config": {
@@ -80,6 +97,12 @@
       "description": "Paste the key from TabTree → Settings → Account → Claude connector (it starts with tt_live_).",
       "required": false,
       "sensitive": true
+    },
+    "api_key_fallback": {
+      "type": "string",
+      "title": "Connector key, not encrypted",
+      "description": "Leave empty, unless TabTree says Claude Desktop did not pass your key. Paste the same key here: it is then saved in clear text in Claude Desktop's settings on this computer.",
+      "required": false
     },
     "backup_folder": {
       "type": "directory",

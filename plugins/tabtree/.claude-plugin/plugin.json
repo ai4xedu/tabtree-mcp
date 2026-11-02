@@ -1,34 +1,17 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "tabtree",
-  "displayName": "TabTree",
-  "version": "1.6.1",
-  "description": "A facilitation skill that ends in a real TabTree document — a vision, mission and OKR canvas written to your TabTree account — plus the Claude connector for mind maps, kanban boards and whiteboards.",
-  "author": {
-    "name": "TabTree",
-    "email": "info@tabtree.app",
-    "url": "https://tabtree.app"
-  },
-  "homepage": "https://tabtree.app",
-  "repository": "https://github.com/ai4xedu/tabtree-mcp",
-  "license": "SEE LICENSE IN plugins/tabtree/LICENSE.md",
-  "keywords": [
-    "mindmap",
-    "whiteboard",
-    "kanban",
-    "workshop",
-    "okr"
-  ],
-  "mcpServers": {
-    "tabtree": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "tabtree-mcp"
-      ],
-      "env": {
-        "TABTREE_API_KEY": "${TABTREE_API_KEY}"
-      }
+  "version": "1.14.0",
+  "description": "Ties a Claude Code session to one TabTree card: Claude knows what it is working on, even after /clear, and your commits land on the card.",
+  "author": { "name": "TabTree", "url": "https://tabtree.app" },
+  "homepage": "https://tabtree.app/connector",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "userConfig": {
+    "api_key": {
+      "type": "string",
+      "title": "TabTree connector key",
+      "description": "Create it in TabTree → Settings → Account → Claude connector. It starts with tt_live_.",
+      "sensitive": true,
+      "required": false
     }
   }
 }
