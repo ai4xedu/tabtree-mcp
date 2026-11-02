@@ -99,12 +99,13 @@ you writing anything.
 ```bash
 claude plugin marketplace add ai4xedu/tabtree-mcp
 claude plugin install tabtree@tabtree
-claude plugin configure tabtree
 ```
 
-The third command asks for your connector key (`tt_live_…`, from TabTree → ⚙️ Settings →
-Account → Claude connector). The key is kept by Claude Code, never written into a file of
-your repository.
+Then give it your connector key (`tt_live_…`, from TabTree → ⚙️ Settings → Account → Claude
+connector): inside a Claude Code session, run `/plugin configure tabtree@tabtree`. From a
+shell, `claude plugin configure tabtree@tabtree --values-stdin` reads it as
+`{"api_key":"tt_live_…"}` on standard input. The key is kept by Claude Code, never written
+into a file of your repository.
 
 | Command | What it does |
 |---|---|
