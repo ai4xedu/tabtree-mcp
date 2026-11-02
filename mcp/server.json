@@ -3,7 +3,7 @@
   "name": "app.tabtree/tabtree",
   "title": "TabTree",
   "description": "Build mind maps, kanban boards and whiteboards in your TabTree account, team spaces included.",
-  "version": "1.14.0",
+  "version": "1.16.0",
   "repository": {
     "url": "https://github.com/ai4xedu/tabtree-mcp",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "tabtree-mcp",
-      "version": "1.14.0",
+      "version": "1.16.0",
       "transport": {
         "type": "stdio"
       },

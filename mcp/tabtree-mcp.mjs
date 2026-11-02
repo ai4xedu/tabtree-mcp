@@ -1473,7 +1473,7 @@ function boardObstacles(doc, box, skip){
 // LA MISE EN RANGÉES. PURE. `cells` : les tailles à poser, dans l'ordre. Sous tout ce que la forme contient déjà, rangée par rangée, chaque rangée
 // centrée dans la largeur que la forme offre sur TOUTE sa hauteur (dans une ellipse, la plus étroite de ses deux bords). Rend { placed } — une boîte
 // par cellule — ou { fits } : le nombre qui tenait. Une forme pleine est un refus, jamais un débordement.
-const BOARD_PAD = 24, BOARD_GAP = 24, BOARD_STEP = 8;
+const BOARD_PAD = 24, BOARD_STEP = 8;   // BOARD_GAP (24) : voir le bloc des zones, plus bas
 function boardFlow(box, obstacles, cells, gap){
   const g = gap == null ? BOARD_GAP : gap, top = +box.y, bottom = top + (+box.h), cx = +box.x + (+box.w) / 2;
   const span = (y0, y1)=>{ const a = boardHalfWidth(box, y0), b = boardHalfWidth(box, y1); return (a < 0 || b < 0) ? -1 : Math.min(a, b) - BOARD_PAD; };
@@ -1943,14 +1943,17 @@ function countForest(roots){ return roots.reduce((n,r)=>n + countNodes(r), 0); }
 // `season` (1.9.0) : le nom et l'objectif du sprint qui court, dans `kanban.season` — le champ du panneau 🏁 (passe Season).
 // `style` (2026-10-29) : le style d'un nœud que les COÉQUIPIERS se transmettent en direct ; Claude ne le propose pas (refusé plus bas).
 // `badd`, `bset`, `bdel`, `bimg` (1.14.0) : les éléments d'un board. Claude ne les ÉCRIT pas sous ces noms : `buildBoardOps` les fabrique depuis add_image, move…
-const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg"];
+// `star` (1.15.0, 2026-11-02) : une ⭐ sur une carte, pour l'utilisateur du compte — un signet PERSONNEL (`settings.stars` de son compte,
+// jamais le document). La proposition va dans la boîte de l'appelant, donc c'est son app qui la pose, par son unique écrivain (`starToggle`).
+const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg","star","place"];
 // ⚡ Les ops que l'app applique D'ELLE-MÊME (1.5.0, décidé « hybride » le 2026-10-20) — ≡
 // `PROP_AUTO_OPS` d'app/index.html (le test compare les deux). Plus `cols` quand le tableau n'a
 // pas encore de colonnes (`seed`). C'est l'APP qui décide : le connecteur ne fait que demander
 // (`auto:true`) et découper le lot pour que le reste parte à la revue.
 // `format` (1.9.0) en est : il change la disposition d'une carte, ne réécrit rien de ce qu'un humain a écrit, et ⌘Z le défait.
 // `badd` et `bimg` (1.14.0) en sont, et `bset` tel que `buildBoardOps` l'écrit : la place, la taille, l'ordre, le nom d'une image — rien d'autre. L'app le rejuge (`propBsetSafe`).
-const PROP_AUTO_OPS = ["add","move","check","tags","assign","priority","due","start","est","attr","comment","pic","img","link","format","badd","bimg"];
+// `star` (1.15.0) en est : il ne touche ni le document ni le travail d'un autre — c'est un signet de l'utilisateur, qu'il retire d'un clic.
+const PROP_AUTO_OPS = ["add","move","check","tags","assign","priority","due","start","est","attr","comment","pic","img","link","format","badd","bimg","star","place"];
 // Les ops que Claude peut ÉCRIRE et qui n'existent pas telles quelles dans l'app : `lever` devient
 // un attribut « Lever: <clé> » (c'est ainsi que l'app le range, `KB_LEVER_ATTR`), `columns` est le
 // nom lisible de `cols`.
@@ -1961,6 +1964,90 @@ const KB_LEVER_KEYS_MCP = ["human","think","accelerate","automate"];
 // c'est ce qui rend l'ajout IDEMPOTENT dans l'app — rejoué par deux appareils, il ne double pas.
 function newNid(){ return "mcp" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function cloneDoc(d){ return JSON.parse(JSON.stringify(d)); }
+// ---------------------------------------------------------------------------
+// 🎨 LE TABLEAU LIBRE — la règle des ZONES, en COPIE CONFORME (2026-11-02). Dans la vue board de l'app, une forme dont le NOM est une colonne,
+// une personne ou une date est une zone : déposer une carte dedans écrit le champ. `place` (propose_changes) pose la carte, et le connecteur
+// AJOUTE les ops que la zone implique par ces MÊMES fonctions. Copiées mot pour mot d'app/index.html et comparées par le test (BZ_HEADS) :
+// un changement de l'une exige l'autre dans le même commit. La géométrie (boardHalfWidth… boardContainerOf) est plus haut, `kbColNorm`/`kbColKin`/`okDate` plus bas.
+// `BOARD_GAP` (24) est déclaré ICI, sur la ligne de l'app, et plus avec `BOARD_PAD` : la valeur est la même, la copie reste mot pour mot.
+// ---------------------------------------------------------------------------
+const okAssign = v => (typeof v === "string" && !/[\x00-\x1f\x7f]/.test(v))
+  ? assignNorm(v.trim().slice(0, 400)) : "";
+function assignList(v){ return String(v || "").split(/[,;]/).map(s=>s.trim()).filter(Boolean); }
+function agentOf(part){ const m = typeof part === "string" ? /^agent:([a-z0-9-]{1,24})$/.exec(part) : null; return m ? m[1] : null; }
+function assignNorm(v){
+  const seen = new Set(), out = [];
+  for(const s of assignList(v)){ const k = s.toLowerCase(); if(!seen.has(k)){ seen.add(k); out.push(s); } }
+  return out.slice(0, 12).join(", ");
+}
+const BOARD_POS_MAX = 50000;
+function okBoardPos(bx, by){
+  // UN SEUL écrivain de « non placé » : les deux moitiés sont des NOMBRES, ou la paire est nulle. Jamais de coercition (+null vaut 0 :
+  // une moitié absente ferait une carte à (5, 0)).
+  if(typeof bx !== "number" || typeof by !== "number") return { bx:null, by:null };
+  const a = Math.round(bx), b = Math.round(by);
+  if(!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a) > BOARD_POS_MAX || Math.abs(b) > BOARD_POS_MAX) return { bx:null, by:null };
+  return { bx:a, by:b };
+}
+const BOARD_CARD_W = 190, BOARD_CARD_H = 110, BOARD_GAP = 24, BOARD_ZONE_PAD = 36;
+const BOARD_DUE_WORDS = { today:0, "aujourd hui":0, tomorrow:1, demain:1, "this week":7, "cette semaine":7 };
+function boardDateWord(t, today){
+  const k = kbColNorm(t); if(!Object.prototype.hasOwnProperty.call(BOARD_DUE_WORDS, k) || !okDate(today)) return null;
+  const d = new Date(today + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + BOARD_DUE_WORDS[k]);
+  return d.toISOString().slice(0, 10);
+}
+function boardZoneOf(shape, ctx){
+  if(!boardCanHold(shape)) return null;
+  const raw = String(shape.text || "").trim(), t = kbColNorm(raw);
+  if(!t) return null;
+  const cols = (ctx && ctx.cols) || [];
+  const exact = cols.find(c => kbColNorm(c.name) === t); if(exact) return { kind:"col", value:exact.id };
+  const fam = kbColKin(raw);
+  if(fam >= 0){ const c = cols.find(k => kbColKin(k.name) === fam); if(c) return { kind:"col", value:c.id }; }
+  for(const p of (ctx && ctx.people) || []){ if((p.labels || []).some(l => kbColNorm(l) === t)) return { kind:"assign", value:p.key }; }
+  if(okDate(raw)) return { kind:"due", value:raw };
+  const rel = boardDateWord(raw, ctx && ctx.today); if(rel) return { kind:"due", value:rel };
+  return null;
+}
+function boardZonesOf(shapes, ctx){
+  const out = [];
+  (shapes || []).forEach((s, i)=>{ const z = boardZoneOf(s, ctx); if(z) out.push({ i, shape:s, zone:z }); });
+  return out;
+}
+function boardZonesAt(zones, cx, cy){
+  const out = { assign:[] };
+  const area = z => (+z.shape.w || 0) * (+z.shape.h || 0);
+  zones.forEach(z=>{
+    if(!boardHolds(z.shape, cx, cy)) return;
+    if(z.zone.kind === "assign"){ out.assign.push(z); return; }
+    if(!out[z.zone.kind] || area(z) < area(out[z.zone.kind])) out[z.zone.kind] = z;
+  });
+  if(!out.assign.length) delete out.assign;
+  return out;
+}
+// Ce qu'un dépôt ÉCRIT : à l'ENTRÉE et à la SORTIE d'une zone, jamais au repos. Sortir de toute zone colonne ou date n'écrit
+// rien (sortir du tableau est le ✕ ; une échéance ne s'efface pas en glissant dans le vide). Une personne s'AJOUTE, ne remplace pas.
+// La colonne AFFICHÉE d'une carte, calculée depuis `cols` (la règle de kbDispColId, sans la globale) : une carte cochée vit dans la colonne
+// terminale sans quitter la sienne, donc `col` seul mentirait sur où elle est.
+function boardDispCol(node, cols){
+  if(!node.col) return null;
+  const dc = (cols || []).find(c => c.done);
+  return (dc && node.check === true) ? dc.id : node.col;
+}
+function boardDropPlan(node, before, after, ctx){
+  const out = {};
+  const bc = before.col ? before.col.zone.value : null, ac = after.col ? after.col.zone.value : null;
+  if(ac && ac !== boardDispCol(node, ctx && ctx.cols)) out.col = ac;
+  const bd = before.due ? before.due.zone.value : null, ad = after.due ? after.due.zone.value : null;
+  if(ad && ad !== bd && ad !== (node.due || null)) out.due = ad;
+  const was = new Set((before.assign || []).map(z => z.zone.value)), now = new Set((after.assign || []).map(z => z.zone.value));
+  let list = assignList(node.assign || "");
+  let changed = false;
+  was.forEach(k => { if(!now.has(k) && list.indexOf(k) >= 0){ list = list.filter(x => x !== k); changed = true; } });
+  now.forEach(k => { if(!was.has(k) && list.indexOf(k) < 0){ list = list.concat([k]); changed = true; } });
+  if(changed){ const v = okAssign(list.join(", ")); if(v !== (node.assign || "")) out.assign = v; }
+  return out;
+}
 // Les dix étiquettes de couleur du kanban — ≡ `KB_TAGS` de index.html (le test compare les deux).
 const KB_TAG_KEYS = ["green","yellow","orange","red","purple","blue","sky","lime","pink","gray"];
 
@@ -2118,6 +2205,13 @@ function buildProposalOps(mapDoc0, changes){
       const v = c.value === "true" ? true : c.value === "false" ? false : c.value;
       if(typeof v !== "boolean") throw new Error(`${where}: \`value\` must be true or false for a "check".`);
       out.value = v;
+    } else if(op === "star"){
+      // ⭐ Un signet de l'utilisateur, posé (par défaut) ou retiré (`value: false`). Il n'écrit rien dans la carte : la copie de
+      // travail ne change pas. Le centre d'une carte n'est pas une carte qu'on retrouve dans ✅ My work : refusé ici, en le disant.
+      const v = c.value == null ? true : c.value === "true" ? true : c.value === "false" ? false : c.value;
+      if(typeof v !== "boolean") throw new Error(`${where}: \`value\` must be true (star the card, the default) or false (remove the star) for a "star".`);
+      if(r.node === mapDoc.root) throw new Error(`${where}: the centre of the map cannot be starred — star one of its cards.`);
+      out.on = v;
     } else if(op === "delete"){
       if(r.node === mapDoc.root) throw new Error(`${where}: the centre of the map cannot be deleted.`);
       out.drops = countNodes(r.node);
@@ -2160,6 +2254,63 @@ function buildProposalOps(mapDoc0, changes){
       if(typeof c.assign !== "string") throw new Error(`${where}: \`assign\` is required for an "assign" — a name or e-mail (an empty string clears it).`);
       if(c.assign.length > 120 || /[\x00-\x1f\x7f]/.test(c.assign)) throw new Error(`${where}: \`assign\` is too long or contains control characters (120 characters max).`);
       out.assign = c.assign.trim();
+    } else if(op === "place"){
+      // 🎨 Poser une carte du kanban sur le canevas LIBRE (la vue board de l'app). `bx`/`by` sont le coin haut-gauche de la carte ; une
+      // forme du canevas dont le NOM est une colonne, une personne ou une date est une ZONE, et la poser dedans écrit le champ, par la règle
+      // de l'app (`boardDropPlan`, copiée). Le connecteur AJOUTE donc ces ops (move / assign / due) derrière le `place`, dans l'ordre
+      // d'un dépôt à la souris. Un lot qui contredit sa propre zone est refusé ICI, en la nommant : l'app aurait deux écritures
+      // opposées à départager. Le connecteur ne connaît pas l'annuaire de l'espace : une zone PERSONNE n'est reconnue que par un
+      // `assign` déjà présent sur la carte (ou « Claude »).
+      if(r.node === mapDoc.root) throw new Error(`${where}: the centre of the map is not a card — "place" applies to a card of the kanban.`);
+      if(!colsNow()) throw new Error(`${where}: this map has no kanban board — "place" puts a kanban card on the free board. Add a "columns" change first.`);
+      if(typeof c.x !== "number" || typeof c.y !== "number" || !Number.isFinite(c.x) || !Number.isFinite(c.y))
+        throw new Error(`${where}: \`x\` and \`y\` are required for a "place" — the card's left and top edge on the free board, integers within ±${BOARD_POS_MAX}.`);
+      const pos = okBoardPos(c.x, c.y);
+      if(pos.bx === null) throw new Error(`${where}: \`x\` and \`y\` are out of range — whole numbers within ±${BOARD_POS_MAX}.`);
+      const ctx = boardZoneCtx(mapDoc);
+      const zones = boardZonesOf(mapDoc.shapes, ctx);
+      const was = (Number.isFinite(r.node.bx) && Number.isFinite(r.node.by)) ? boardZonesAt(zones, r.node.bx + BOARD_CARD_W / 2, r.node.by + BOARD_CARD_H / 2) : {};
+      const now = boardZonesAt(zones, pos.bx + BOARD_CARD_W / 2, pos.by + BOARD_CARD_H / 2);
+      // Un `assign` ANTÉRIEUR du lot est déjà le responsable de la carte : la zone s'y AJOUTE (elle ne remplace pas), donc on juge à partir de lui.
+      let cur = r.node.assign || "";
+      changes.slice(0, i).forEach(oc=>{
+        if(!oc || String(oc.op || "").trim() !== "assign") return;
+        const other = propFind(mapDoc.root, String(oc.target == null ? "" : oc.target));
+        if(!other.error && other.node === r.node) cur = okAssign(String(oc.assign == null ? "" : oc.assign));
+      });
+      const plan = boardDropPlan(Object.assign({}, r.node, { assign: cur }), was, now, ctx);
+      const zname = z => "“" + String((z && z.shape && z.shape.text) || "").replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 60) + "”";
+      const adds = "assign" in plan ? assignList(plan.assign).map(x=>x.toLowerCase()).filter(x=>!assignList(cur).some(y=>y.toLowerCase() === x)) : [];
+      const drops = "assign" in plan ? assignList(cur).map(x=>x.toLowerCase()).filter(x=>!assignList(plan.assign).some(y=>y.toLowerCase() === x)) : [];
+      const covered = {};
+      changes.forEach((oc, j)=>{
+        if(j === i || !oc || !["move", "assign", "due"].includes(String(oc.op || "").trim())) return;
+        const other = propFind(mapDoc.root, String(oc.target == null ? "" : oc.target));
+        if(other.error || other.node !== r.node) return;
+        const at = `${where}: "place" lands in the zone`, vs = `but change #${j+1}`;
+        if(oc.op === "move" && plan.col !== undefined){
+          let id; try { const raw = String(oc.col == null ? "" : oc.col); id = raw ? colRef(raw, "change #" + (j+1)) : ""; } catch(e){ return; }
+          if(id !== plan.col) throw new Error(`${at} ${zname(now.col)}, which sets column ${plan.col}, ${vs} moves the card to ${id ? "column " + id : "off the board"}. Drop one of the two.`);
+          covered.col = true;
+        } else if(oc.op === "due" && plan.due !== undefined){
+          const q = oc.due == null ? "" : String(oc.due);
+          if(q !== plan.due) throw new Error(`${at} ${zname(now.due)}, which sets the due day ${plan.due}, ${vs} sets it to ${q || "nothing"}. Drop one of the two.`);
+          covered.due = true;
+        } else if(oc.op === "assign" && "assign" in plan && j > i){   // seul un assign POSTÉRIEUR contredit : un antérieur est déjà dans `cur`
+          const list = assignList(String(oc.assign == null ? "" : oc.assign)).map(x=>x.toLowerCase());
+          const miss = adds.find(x=>list.indexOf(x) < 0), kept = drops.find(x=>list.indexOf(x) >= 0);
+          if(miss !== undefined) throw new Error(`${at} ${zname((now.assign || []).find(z=>z.zone.value === miss))}, which makes ${miss} an owner, ${vs} sets the owners to ${list.join(", ") || "nobody"}. Drop one of the two.`);
+          if(kept !== undefined) throw new Error(`${at} outside ${zname((was.assign || []).find(z=>z.zone.value === kept))}, which takes ${kept} off the card, ${vs} keeps ${kept} as an owner. Drop one of the two.`);
+          covered.assign = true;
+        }
+      });
+      out.bx = pos.bx; out.by = pos.by;
+      r.node.bx = pos.bx; r.node.by = pos.by;
+      const implied = [];
+      if(plan.col !== undefined){ r.node.col = plan.col; if(!covered.col) implied.push({ op:"move", target, was: out.was, col: plan.col }); }
+      if(plan.due !== undefined){ r.node.due = plan.due; if(!covered.due) implied.push({ op:"due", target, was: out.was, due: plan.due }); }
+      if("assign" in plan){ r.node.assign = plan.assign; if(!covered.assign) implied.push({ op:"assign", target, was: out.was, assign: plan.assign }); }
+      return [out].concat(implied);
     } else if(op === "priority"){
       const q = (c.priority == null) ? 0 : c.priority;
       if(!Number.isInteger(q) || q < 0 || q > 6) throw new Error(`${where}: \`priority\` must be a whole number from 1 (highest) to 6, or 0 to remove it.`);
@@ -2209,7 +2360,7 @@ function buildProposalOps(mapDoc0, changes){
       out.est = q;
     }
     return out;
-  });
+  }).reduce((all, o)=>all.concat(o), []);   // un `place` rend plusieurs ops : le sien, puis ceux que sa zone implique
 }
 // 👥 L'ÉQUIPE du tableau (`kanban.team`, 2026-10-12) — qui fait quoi. Montrée par read_map pour la
 // même raison que dans l'app : c'est elle qui permet de proposer un RESPONSABLE (assign) au lieu de
@@ -2318,6 +2469,32 @@ function importHint(){
 // ---------------------------------------------------------------------------
 // 🃏 Le KANBAN (1.5.0) — lire ses colonnes, et en fabriquer un d'un seul appel
 // ---------------------------------------------------------------------------
+// Le contexte des zones, tel que `boardCtx` de l'app le bâtit — SANS l'annuaire de l'espace, que le connecteur ne connaît pas : les personnes sont celles
+// d'un `assign` déjà présent sur la carte, plus Claude. Une zone PERSONNE n'est donc reconnue que pour elles.
+function boardZoneCtx(doc){
+  const people = new Map(), addP = (key, labels)=>{ const q = people.get(key) || { key, labels:[] }; labels.forEach(l=>{ if(l && q.labels.indexOf(l) < 0) q.labels.push(l); }); people.set(key, q); };
+  (function w(n){ assignList(n.assign).forEach(a=>{ if(!agentOf(a)) addP(a.toLowerCase(), [a, a.split("@")[0]]); }); (n.children || []).forEach(w); })(doc.root);
+  addP("agent:claude", ["claude", "agent:claude"]);
+  return { cols: (doc.kanban && Array.isArray(doc.kanban.cols)) ? doc.kanban.cols : [], people: Array.from(people.values()), today: new Date().toISOString().slice(0, 10) };
+}
+// 🎨 Les ZONES du tableau libre, pour read_map : chaque forme dont le nom est une colonne, une personne ou une date, le champ qu'elle écrit, et ses cartes — lues par
+// leur CHAMP (colonne affichée, responsable, échéance), jamais par leur position : les champs sont la vérité, la position n'est qu'un souvenir. PURE.
+function kanbanZonesText(doc){
+  if(!doc || !Array.isArray(doc.shapes) || !doc.kanban) return "";
+  const ctx = boardZoneCtx(doc), zones = boardZonesOf(doc.shapes, ctx);
+  if(!zones.length) return "";
+  const cards = [];
+  (function w(n){ if(n.col) cards.push(n); (n.children || []).forEach(w); })(doc.root);
+  const has = (z, n)=>z.zone.kind === "col" ? boardDispCol(n, ctx.cols) === z.zone.value
+    : z.zone.kind === "assign" ? assignList(n.assign).some(a=>a.toLowerCase() === z.zone.value) : (n.due || null) === z.zone.value;
+  const count = k => k + (k === 1 ? " card" : " cards");
+  const label = z => String(z.shape.text || "").replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 40);
+  const parts = zones.map(z=>label(z) + " (" + (z.zone.kind === "col" ? z.zone.value : z.zone.kind === "assign" ? "owner" : "due " + z.zone.value) + ", " + count(cards.filter(n=>has(z, n)).length) + ")");
+  const out = cards.filter(n=>!zones.some(z=>has(z, n))).length;
+  if(out) parts.push(count(out) + " outside any zone");
+  return "\n🎨 zones: " + parts.join(" · ")
+    + "\n(Shapes on the free board named after a column, a person or a day. Put a card on one with propose_changes op \"place\" { target, x, y } and TabTree writes that field itself; a person zone is recognised only from an assign already on the map, or Claude.)";
+}
 function kanbanToText(doc){
   const k = doc && doc.kanban;
   if(!k || !Array.isArray(k.cols) || !k.cols.length) return "";
@@ -2326,7 +2503,8 @@ function kanbanToText(doc){
     .filter(([key, v]) => KB_TAG_KEYS.includes(key) && typeof v === "string" && v.trim())
     .map(([key, v]) => key + " = “" + v.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 40) + "”") : [];
   return "\n\n🃏 Kanban columns: " + cols + (tags.length ? "\n🏷 Labels: " + tags.join(", ") : "")
-    + "\n(Cards are the nodes marked ⟪column: …⟫. Move one with propose_changes op \"move\" and `col` = a column name or id; a ticked card [x] shows in the done column.)";
+    + "\n(Cards are the nodes marked ⟪column: …⟫. Move one with propose_changes op \"move\" and `col` = a column name or id; a ticked card [x] shows in the done column.)"
+    + kanbanZonesText(doc);
 }
 // ---------------------------------------------------------------------------
 // 🗂 LE BLOC « PROJECT » de read_map (1.9.0, 2026-10-26)
@@ -3633,18 +3811,19 @@ const TOOLS = [
   },
   {
     name: "propose_changes",
-    description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Changes that rewrite or remove what someone wrote — rename, note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
-      + "STEERING A 🗂 PROJECT (format projet) — no extra tool, four safe changes: (1) read_map and use its “🗂 Project” block — the live sprint's counts and the Backlog ranked by ICE = Impact × Confidence × (6 − Effort), from the cards' (or their epic's) `Impact:` / `Confidence:` / `Effort:` attributes; (2) plan the next sprint by pulling the top of that ranking from Backlog into “To do” with `move` — keep the work-in-progress to about 6 committed cards in total (committed = everything off Backlog), fewer if some are still Doing; (3) set the running sprint's goal with { op: \"season\", goal: \"…\", name: \"Sprint 2\" } — it lands in the 🎯 chip and the 🏁 panel, by itself when nobody typed one, for review otherwise (set \"Sprint length\" / \"Sprints start\" once on the ROOT with `attr`); (4) settle a bet with { op: \"attr\", target: \"<epic text>\", name: \"Verdict\", value: \"validated\" } — untested, testing, validated or invalidated. Give each change a `why`. Add a new epic with `add` under “🧱 Epics” (its four attribute lines and its cards in one markdown), a decision with `add` under “📝 Decisions”, and turn an existing map into a project with { op: \"format\", format: \"projet\" }. The user closes a sprint in TabTree's 🏁 panel; the connector never closes one.",
+    description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, a ⭐ star for the user, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Changes that rewrite or remove what someone wrote — rename, note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
+      + "STEERING A 🗂 PROJECT (format projet) — no extra tool, four safe changes: (1) read_map and use its “🗂 Project” block — the live sprint's counts and the Backlog ranked by ICE = Impact × Confidence × (6 − Effort), from the cards' (or their epic's) `Impact:` / `Confidence:` / `Effort:` attributes; (2) plan the next sprint by pulling the top of that ranking from Backlog into “To do” with `move` — keep the work-in-progress to about 6 committed cards in total (committed = everything off Backlog), fewer if some are still Doing; (3) set the running sprint's goal with { op: \"season\", goal: \"…\", name: \"Sprint 2\" } — it lands in the 🎯 chip and the 🏁 panel, by itself when nobody typed one, for review otherwise (set \"Sprint length\" / \"Sprints start\" once on the ROOT with `attr`); (4) settle a bet with { op: \"attr\", target: \"<epic text>\", name: \"Verdict\", value: \"validated\" } — untested, testing, validated or invalidated. Give each change a `why`. Add a new epic with `add` under “🧱 Epics” (its four attribute lines and its cards in one markdown), a decision with `add` under “📝 Decisions”, and turn an existing map into a project with { op: \"format\", format: \"projet\" }. The user closes a sprint in TabTree's 🏁 panel; the connector never closes one."
+      + " PLACING A KANBAN CARD ON THE FREE BOARD: place { target, x, y } puts a card where the user's 🎨 Board view draws it (x, y = its top-left corner); a shape there named after a column, a day or a person is a zone, and TabTree writes that field itself — the move / due / assign the zone implies are added to your proposal. read_map lists the zones. A person zone is recognised only from an assign already on the map, or Claude. A batch that contradicts its own zone is refused.",
     inputSchema: { type:"object", properties:{
       file:{ type:"string", description:"The map to change — a file name (or map name) from list_maps" },
       note:{ type:"string", description:"One line telling the user what this proposal does and why. Shown above the changes." },
       changes:{ type:"array", description:"The proposed changes, applied in order", items:{ type:"object", properties:{
-        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","start","attr","comment","est","lever","link","columns","format","season","add_image","add_shape","add_text","resize","label","arrange"], description:"On a BOARD only: add_image, add_shape, add_text, resize, label, arrange — and move / delete with an element id as target (see the tool description). On a mind map or kanban: columns = set the kanban columns (give `columns`; no target) — on a map with no kanban yet this creates the board; format = set the map's living format (give `format`; no target) — \"projet\" turns it into a 🗂 project, \"\" back to a plain mind map; season = set the RUNNING sprint's goal (give `goal`, optionally `name` = the sprint's name; no target) — the goal the 🎯 chip and the 🏁 panel show, kept until the user closes the sprint; applied by itself when nobody typed one, otherwise sent for review; add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; img = put a SCREENSHOT on it (give `file`, the path of the image on this machine — or `data`; `img: \"\"` removes it); persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) or a Second Brain Blueprint (“Second brain —”) from an interview — no target; tags = set the card's colour labels; assign = who the task is for; priority = 1 (highest) to 6; due = the due day; attr = set a “Name: value” attribute on the node (an estimate, a budget…); comment = add a signed comment to the card's thread (give `text`); est = set the time ESTIMATE of the task (give `est`, e.g. \"2h\", \"45\" = 45 minutes, \"\" removes it); start = the start day; lever = the card's Ai4X lever (give `lever`); link = put a link on the node (give `link`)" },
+        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","start","attr","comment","est","lever","link","star","columns","format","season","place","add_image","add_shape","add_text","resize","label","arrange"], description:"On a BOARD only: add_image, add_shape, add_text, resize, label, arrange — and move / delete with an element id as target (see the tool description). On a mind map or kanban: columns = set the kanban columns (give `columns`; no target) — on a map with no kanban yet this creates the board; format = set the map's living format (give `format`; no target) — \"projet\" turns it into a 🗂 project, \"\" back to a plain mind map; season = set the RUNNING sprint's goal (give `goal`, optionally `name` = the sprint's name; no target) — the goal the 🎯 chip and the 🏁 panel show, kept until the user closes the sprint; applied by itself when nobody typed one, otherwise sent for review; add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; img = put a SCREENSHOT on it (give `file`, the path of the image on this machine — or `data`; `img: \"\"` removes it); persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) or a Second Brain Blueprint (“Second brain —”) from an interview — no target; tags = set the card's colour labels; assign = who the task is for; priority = 1 (highest) to 6; due = the due day; attr = set a “Name: value” attribute on the node (an estimate, a budget…); comment = add a signed comment to the card's thread (give `text`); est = set the time ESTIMATE of the task (give `est`, e.g. \"2h\", \"45\" = 45 minutes, \"\" removes it); place = put a kanban card on the free board (give `x` and `y`, its top-left corner, whole numbers within ±50000) — a shape there named after a column, a day or a person is a ZONE and TabTree writes that field itself, so the move / assign / due the zone implies are added for you; start = the start day; lever = the card's Ai4X lever (give `lever`); link = put a link on the node (give `link`); star = put a ⭐ on the card for the user — a personal bookmark that shows on the card and in their ✅ My work, applied by itself (`value: false` removes it)" },
         target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\" if ambiguous (not used by persona). On a board: an element id from read_map (sh:2, im:7, st:0) or the exact name of an image" },
         inside:{ type:"string", description:"add_image: the shape to put it in (sh:2). Without x and y it is laid out below what the shape holds, never overlapping" },
         row:{ type:"integer", description:"add_image with inside: optional grid row, from 0 — counted below what the shape already holds. Give row and col to every image of that shape, or to none" },
-        x:{ type:"number", description:"add_image, add_shape, add_text, move: the left edge on the board" },
-        y:{ type:"number", description:"add_image, add_shape, add_text, move: the top edge on the board" },
+        x:{ type:"number", description:"add_image, add_shape, add_text, move: the left edge on the board. place: the card's left edge" },
+        y:{ type:"number", description:"add_image, add_shape, add_text, move: the top edge on the board. place: the card's top edge" },
         dx:{ type:"number", description:"move: by how much, horizontally, instead of x" },
         dy:{ type:"number", description:"move: by how much, vertically, instead of y" },
         w:{ type:"number", description:"add_image, add_shape, add_text, resize, arrange: the width. With inside or arrange, w and h form the cell the image is fitted into — use the same values to give every logo the same size" },
@@ -3680,7 +3859,7 @@ const TOOLS = [
         // ⚠️ UNE seule déclaration de `value` (1.5.0) : il y en avait deux (booléen pour check, texte pour
         // attr) et la seconde écrasait la première — le schéma disait donc « texte » pour un check, et
         // Claude envoyait "true", que le contrôle d'un check refuse.
-        value:{ type:["boolean","string"], description:"check: true to tick, false to untick. attr: its value as text, e.g. \"2h\" (\"\" removes the attribute)" },
+        value:{ type:["boolean","string"], description:"check: true to tick, false to untick. star: false to remove the star (true by default). attr: its value as text, e.g. \"2h\" (\"\" removes the attribute)" },
         est:{ type:"string", description:"est: the estimate as a duration — \"2h\", \"1h30\", \"45\" (minutes), \"2:15\" — or \"\" to remove it" },
         format:{ type:"string", enum: [""].concat(FORMATS_MCP), description:"format: the map's living format — projet, okr, pv, org, radial, tree, outline, oneside, timeline, suivi — or \"\" for a plain mind map" }
       }, required:["op"], additionalProperties:false } }
@@ -4313,7 +4492,7 @@ function handle(msg){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.14.0" }
+      serverInfo: { name: "tabtree", version: "1.16.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -4451,7 +4630,7 @@ function ttOpIs(o, n){
 function ttPendingLines(pending, cols){
   const say = o=>{
     const t = "“" + projLine(String(o.target || "").split(" > ").pop(), 50) + "”";
-    return o.op === "move" ? t + " → " + ttColName(cols, o.col) : o.op === "check" ? t + " ticked" : projLine(o.op, 16) + " on " + t;
+    return o.op === "move" ? t + " → " + ttColName(cols, o.col) : o.op === "check" ? t + " ticked" : o.op === "star" ? t + (o.on === false ? " unstarred" : " starred") : projLine(o.op, 16) + " on " + t;
   };
   const line = (head, list)=>list.length ? [head + " (" + list.length + "): " + list.slice(0, 3).map(say).join(", ") + (list.length > 3 ? ", …" : "")] : [];
   const all = pending || [];
@@ -4566,7 +4745,7 @@ const TT_NET_MS = 3000;
 async function ttHookSessionStart(){
   const { cwd, link } = ttHookInput();
   if(!link) return "";   // non relié : aucun appel réseau, jamais
-  if(!API_KEY_OK) return "TabTree plugin: no valid connector key. Create one in TabTree → Settings → Account → Claude connector, then run: claude plugin configure tabtree";
+  if(!API_KEY_OK) return "TabTree plugin: no valid connector key. Create one in TabTree → Settings → Account → Claude connector, then run /plugin configure tabtree@tabtree in Claude Code";
   const card = ttCardRead(cwd);
   ttEnqueue(cwd, card);
   const flushed = ttFlush(cwd, link).catch(()=>{});   // ce qui restait de la session d'avant
