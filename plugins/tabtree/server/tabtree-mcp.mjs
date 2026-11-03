@@ -930,6 +930,11 @@ function zMcp(v){
 function okImgLine(v, max){ return (typeof v === "string") ? v.replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : ""; }
 function okImgName(v){ return okImgLine(v, 120); }
 function okImgAlt(v){ return okImgLine(v, 400); }
+// 💬 La SOURCE d'une image venue du web (2026-11-02) : la page ou le fichier d'où elle vient. https seulement, 500 caractères
+// au plus, sans espace ni guillemet (écrits \x22 \x27 : un guillemet littéral dans la classe tromperait l'extracteur de déclarations du test). COPIE CONFORME de celle d'app/index.html (le test du connecteur compare) : le connecteur l'écrit aussi.
+function okImgFrom(v){ return (typeof v === "string" && v.length <= 500 && /^https:\/\/[^\s\x22\x27<>]+$/i.test(v)) ? v : ""; }
+// L'hôte d'une source, pour l'affichage : "" si la source ne se lit pas (la regex de okImgFrom laisse passer « https://: » que new URL refuse). Comme imgFromHost de l'app.
+function imgFromHost(v){ try{ return new URL(okImgFrom(v)).hostname.toLowerCase().replace(/^www\./, ""); }catch(e){ return ""; } }
 // Le nom donné, sinon celui du fichier sans son extension — comme un glisser-déposer dans l'app.
 function boardImageName(e){
   const stem = s=>okImgName(s.replace(/\.[A-Za-z0-9]{1,5}$/, ""));
@@ -969,7 +974,7 @@ function buildBoardDoc(name, elements, connections, style){
       // La boîte garde les PROPORTIONS de l'image : un logo étiré se voit tout de suite. Une
       // seule cote donnée → l'autre en découle ; aucune → 220 px sur le côté long.
       const { w, h } = boardImageBox(im, e);
-      return { lid: String(e.id != null ? e.id : i), kind: "image", text: "", src: im.src, z: zMcp(e.z), name: boardImageName(e), alt: okImgAlt(e.alt),
+      return { lid: String(e.id != null ? e.id : i), kind: "image", text: "", src: im.src, z: zMcp(e.z), name: boardImageName(e), alt: okImgAlt(e.alt), from: okImgFrom(e.url),
                x: Number.isFinite(+e.x) && e.x!=null ? Math.round(+e.x) : null,
                y: Number.isFinite(+e.y) && e.y!=null ? Math.round(+e.y) : null, w, h };
     }
@@ -1096,7 +1101,7 @@ function buildBoardDoc(name, elements, connections, style){
   for(const e of els){
     if(e.kind==="image"){
       refOf.set(e.lid, "im:" + images.length);
-      images.push({ id: "im" + images.length, src: e.src, x: e.x, y: e.y, w: e.w, h: e.h, z: e.z, name: e.name || undefined, alt: e.alt || undefined });
+      images.push({ id: "im" + images.length, src: e.src, x: e.x, y: e.y, w: e.w, h: e.h, z: e.z, name: e.name || undefined, alt: e.alt || undefined, from: e.from || undefined });
     } else if(e.kind==="sticky"){
       refOf.set(e.lid, "st:" + stickies.length);
       stickies.push({ text:e.text, x:e.x, y:e.y, w:e.w, h:e.h, color:e.color, size:e.size||undefined, pic:e.pic||undefined, z:e.z });
@@ -1692,9 +1697,10 @@ function buildBoardOps(doc0, changes){
         if(z) o.z = z;
         if(b.name) o.name = b.name;
         if(alt) o.alt = alt;
+        if(okImgFrom(b.e.url)) o.from = okImgFrom(b.e.url);
         boardWhy(b.e, o, b.where);
         out.push(o);
-        doc.images.push({ id:b.id, src:b.im.src, x:s.x, y:s.y, w:s.w, h:s.h, z, name:b.name, alt });
+        doc.images.push({ id:b.id, src:b.im.src, x:s.x, y:s.y, w:s.w, h:s.h, z, name:b.name, alt, from: okImgFrom(b.e.url) || undefined });
         placedLines.push(`“${b.name || "image"}” → @(${s.x},${s.y}) ${s.w}×${s.h}${hold ? " inside " + hold.ref : ""}`);
       });
       continue;
@@ -1848,7 +1854,7 @@ function boardToText(doc, ctx){
     imgs.forEach((m,i)=>{
       const t = (/^data:image\/([a-z+.-]+)/i.exec(m.src||"") || [,"?"])[1].replace("svg+xml","svg");
       const nm = okImgName(m.name), alt = okImgAlt(m.alt), by = boardContainerOf(doc, m);
-      lines.push(`  im:${i} [${t}, ${Math.round(String(m.src||"").length * 3 / 4 / 1024)} KB]${nm ? " " + JSON.stringify(nm) : ""} @(${m.x},${m.y}) ${m.w}×${m.h}${zs(m)}${by >= 0 ? " inside sh:" + by : ""}${alt ? " — alt: " + JSON.stringify(alt) : ""}`);
+      lines.push(`  im:${i} [${t}, ${Math.round(String(m.src||"").length * 3 / 4 / 1024)} KB]${nm ? " " + JSON.stringify(nm) : ""} @(${m.x},${m.y}) ${m.w}×${m.h}${zs(m)}${by >= 0 ? " inside sh:" + by : ""}${alt ? " — alt: " + JSON.stringify(alt) : ""}${imgFromHost(m.from) ? " — from " + imgFromHost(m.from) : ""}`);
     });
   }
   if((doc.stickies||[]).length){
@@ -4560,7 +4566,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.18.1" }
+      serverInfo: { name: "tabtree", version: "1.19.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
