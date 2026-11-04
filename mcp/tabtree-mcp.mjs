@@ -750,7 +750,7 @@ function nodeToMarkdown(n, depth, ctx){
   const doneCol = ((cx.cols) || []).find(k => k.done) || null;
   const byId = new Map();
   (function idx(node){ if(node && node.id) byId.set(node.id, node); (node.children||[]).forEach(idx); })(n);
-  (function walk(node, d){
+  (function walk(node, d, inh){
     let bullet;
     if(d===0) bullet = "# ";
     else bullet = "  ".repeat(d-1) + (node.check!=null ? (node.check ? "- [x] " : "- [ ] ") : "- ");
@@ -774,9 +774,13 @@ function nodeToMarkdown(n, depth, ctx){
     if(node.recur && RECUR_LABEL[node.recur]) marks.push("⟪repeats " + RECUR_LABEL[node.recur] + "⟫");
     if(Array.isArray(node.cmts) && node.cmts.length) marks.push("⟪" + node.cmts.length + " comment" + (node.cmts.length > 1 ? "s" : "") + "⟫");
     if(typeof node.est === "number" && node.est > 0) marks.push("⟪est " + durText(node.est) + "⟫");
+    // ⏸ La carte attend un contact (`kbWaitOf`, la règle de l'app) : dit avec l'âge CONNU, sinon sans âge.
+    const wt = d > 0 ? kbWaitOf(node, inh, cx.cols, cx.last ? (cx.last.get(node.id) || 0) : 0) : null;
+    if(wt) marks.push("⟪waiting on " + wt.who.map(cardPromptNoMail).join(", ") + (wt.since ? " · " + Math.max(0, Math.floor((Math.floor(Date.now() / 1000) - wt.since) / 86400)) + " d" : "") + "⟫");
     lines.push(bullet + body + (marks.length ? "  " + marks.join(" ") : ""));
-    (node.children||[]).forEach(c=>walk(c, d+1));
-  })(n, depth||0);
+    const own = kbContactNames(node);
+    (node.children||[]).forEach(c=>walk(c, d+1, own.length ? own : inh));
+  })(n, depth||0, []);
   return lines.join("\n");
 }
 function countNodes(n){ let c = 1; (n.children||[]).forEach(k=>c += countNodes(k)); return c; }
@@ -1990,7 +1994,7 @@ function countForest(roots){ return roots.reduce((n,r)=>n + countNodes(r), 0); }
 // `badd`, `bset`, `bdel`, `bimg` (1.14.0) : les éléments d'un board. Claude ne les ÉCRIT pas sous ces noms : `buildBoardOps` les fabrique depuis add_image, move…
 // `star` (1.15.0, 2026-11-02) : une ⭐ sur une carte, pour l'utilisateur du compte — un signet PERSONNEL (`settings.stars` de son compte,
 // jamais le document). La proposition va dans la boîte de l'appelant, donc c'est son app qui la pose, par son unique écrivain (`starToggle`).
-const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg","star","place"];
+const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg","star","place","collab","bp"];
 // ⚡ Les ops que l'app applique D'ELLE-MÊME (1.5.0, décidé « hybride » le 2026-10-20) — ≡
 // `PROP_AUTO_OPS` d'app/index.html (le test compare les deux). Plus `cols` quand le tableau n'a
 // pas encore de colonnes (`seed`). C'est l'APP qui décide : le connecteur ne fait que demander
@@ -2001,8 +2005,9 @@ const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","per
 const PROP_AUTO_OPS = ["add","move","check","tags","assign","priority","due","start","est","attr","comment","pic","img","link","format","badd","bimg","star","place"];
 // Les ops que Claude peut ÉCRIRE et qui n'existent pas telles quelles dans l'app : `lever` devient
 // un attribut « Lever: <clé> » (c'est ainsi que l'app le range, `KB_LEVER_ATTR`), `columns` est le
-// nom lisible de `cols`.
-const INPUT_OPS = PROP_OPS.filter(x=>!["badd","bset","bdel","bimg"].includes(x)).concat(["lever", "columns"]);
+// nom lisible de `cols`. `bp` n'en est PAS : seul `plan_system` le dépose, avec son blueprint relu par `bpClean` — par
+// `propose_changes` il partirait sans charge, et l'app jetterait la proposition.
+const INPUT_OPS = PROP_OPS.filter(x=>!["badd","bset","bdel","bimg","bp"].includes(x)).concat(["lever", "columns"]);
 // Les quatre leviers Ai4X — ≡ les clés de `KB_LEVERS` d'app/index.html (le test compare).
 const KB_LEVER_KEYS_MCP = ["human","think","accelerate","automate"];
 // Un identifiant de nœud neuf, de la forme qu'`okNodeId` accepte. Posé sur chaque `add` (`nid`) :
@@ -2096,6 +2101,70 @@ function boardDropPlan(node, before, after, ctx){
 // Les dix étiquettes de couleur du kanban — ≡ `KB_TAGS` de index.html (le test compare les deux).
 const KB_TAG_KEYS = ["green","yellow","orange","red","purple","blue","sky","lime","pink","gray"];
 
+// ---------------------------------------------------------------------------
+// 🛂 UN AGENT NE MET JAMAIS UNE CARTE EN DONE (1.20.0, 2026-11-03 — spec agent-playbooks D6, D12, D13)
+// ---------------------------------------------------------------------------
+// Sur un tableau qui a une colonne de la famille « review » (le playbook : « 🛂 To validate »), la colonne terminale
+// (`done:true`) est le geste de l'humain qui approuve : Claude n'y envoie pas une carte, ni par `move`, ni par un ajout
+// dans cette colonne, ni par la case d'une carte (une carte cochée s'affiche en Done), ni par une zone du tableau libre,
+// ni par `deliver_card`. Sur un CRM (un tableau qui a une colonne « perdue »), Won ET Lost sont des gestes humains :
+// gagner ou perdre une affaire ne se décide pas à la place de quelqu'un. Le refus est une PHRASE pour Claude, jamais un
+// rejet muet. Un tableau ordinaire (To do / Doing / Done) ne change pas : Claude peut toujours y proposer Done.
+// ≡ `crmColLost` de src/js/3130-card-back-and-knowledge-filing.js (le test compare la déclaration).
+function crmColLost(col){
+    return !!(col && ["lost", "lost deals", "perdu", "perdue", "perdus", "perdues", "affaires perdues"].indexOf(kbColNorm(col.name)) >= 0);
+  }
+// La colonne « perdue », côté connecteur : le nom (la copie de l'app, ci-dessus, INTACTE) OU l'id `lost` de CRM_COLS — un
+// tableau né du playbook CRM dont l'utilisateur a renommé « Lost » reste un CRM. PURE.
+function agentColLost(col){ return crmColLost(col) || !!(col && col.id === "lost"); }
+// La colonne « à valider » d'un tableau : ouverte, et dont le nom est de la famille « review » de `KB_COL_KIN` (exact, ou
+// qui COMMENCE par un de ses mots, la règle de `propChangesCol` de l'app), ou d'id `review` (PB_COLS), ou l'un des noms
+// que `KB_COL_KIN` ne connaît pas mais qu'un tableau porte (« 🛂 To validate » se lit « to validate »). PURE.
+const AGENT_REVIEW_NAMES = ["to validate", "to review", "awaiting review", "pending review", "ready for review", "a relire", "en validation"];
+function agentReviewCol(cols){
+  const open = (Array.isArray(cols) ? cols : []).filter(c => c && !c.done && !agentColLost(c));
+  return open.find(c => kbColKin(c.name) === 2) || open.find(c => c.id === "review")
+    || open.find(c => AGENT_REVIEW_NAMES.indexOf(kbColNorm(c.name)) >= 0)
+    || open.find(c => KB_COL_KIN[2].some(w => kbColNorm(c.name).indexOf(w + " ") === 0)) || null;
+}
+// La phrase qui refuse d'envoyer une carte dans la colonne `colId`, ou "". PURE.
+function agentColRefusal(cols, colId){
+  const list = Array.isArray(cols) ? cols : [];
+  const col = list.find(k => k && k.id === colId);
+  if(!col) return "";
+  const crm = list.some(agentColLost), rv = agentReviewCol(list), nm = "“" + String(col.name || "").trim() + "”";
+  if(agentColLost(col)) return "A human moves this card to " + nm + " — an agent never closes a deal as lost. Leave the card where it is and say what you saw in a comment.";
+  if(col.done && crm) return "A human moves this card to " + nm + " — an agent never closes a deal as won. Leave the card where it is and say what you saw in a comment.";
+  if(col.done && rv) return "A human moves this card to " + nm + " — on this board an agent's work goes to “" + rv.name + "”, where the user validates it. Use “" + rv.name + "” instead.";
+  return "";
+}
+// 💼 D13 : « Contact: » porte un NOM (et un rôle), jamais une adresse électronique ni un numéro de téléphone. Un CRM porte des
+// données personnelles, et une carte se publie, se partage, part dans un prompt : l'agent n'y écrit pas de coordonnées. Rend la
+// nature de ce qui ressemble à une coordonnée (« an e-mail address », « a phone number »), ou "". PURE.
+function contactLooksPersonal(v){
+  const s = String(v == null ? "" : v);
+  if(/[^\s@<>(),;]+@[^\s@<>(),;]+\.[A-Za-z]{2,}/.test(s)) return "an e-mail address";
+  // Jugé par SUITE de chiffres : des groupes de chiffres joints par UN séparateur (espace, point, tiret, barre, parenthèse), un « + »
+  // facultatif en tête. Une suite de sept chiffres ou plus est un numéro, SAUF si la suite ENTIÈRE est exactement une date
+  // (AAAA-MM-JJ, JJ/MM/AAAA, JJ.MM.AAAA) ou une période d'années (AAAA-AAAA), sans « + » : « +852 2015-2087 » reste un numéro,
+  // « 06.12.34 56 78 » aussi, « 2019 (2019-2024) » fait deux suites (« ( » après une espace : deux séparateurs) dont aucune n'en est un.
+  const runs = s.match(/\+?\d+(?:[\s().\/-]\d+)*/g) || [];
+  const notPhone = r => /^\d{4}-\d\d-\d\d$/.test(r) || /^\d{1,2}[\/.]\d{1,2}[\/.]\d{4}$/.test(r) || /^(?:19|20)\d\d-(?:19|20)\d\d$/.test(r);
+  return runs.some(r => r.replace(/\D/g, "").length >= 7 && !notPhone(r)) ? "a phone number" : "";
+}
+// Un texte « Contact: <valeur> » (une ligne d'un ajout, un renommage, une sous-tâche) qui porte une coordonnée : la phrase du refus, ou "".
+function contactRefusal(name, value){
+  if(String(name == null ? "" : name).replace(/[*_`]+/g, "").trim().toLowerCase() !== "contact") return "";
+  const k = contactLooksPersonal(value);
+  return k ? "“Contact:” holds a person's name (and role), never " + k + " — an agent never writes contact details on a card. Put the name only." : "";
+}
+// « Contact: … », mais aussi « **Contact:** … » (gras markdown) et « Contact — … » / « Contact - … ».
+function contactRefusalText(text){
+  const t = String(text == null ? "" : text).replace(/^\s*(?:[-*+]\s+)?(?:\[[ xX]\]\s+)?/, "").replace(/[*_`]+/g, "").trim();
+  const m = /^contact\s*(?::|—|–|-)\s*([\s\S]*)$/i.exec(t);
+  return m ? contactRefusal("contact", m[1]) : "";
+}
+
 // Tout est vérifié ICI, contre la carte réelle, et un défaut fait ÉCHOUER l'appel. C'est
 // délibéré : une cible introuvable remonte à Claude, qui peut relire la carte et corriger,
 // alors qu'une proposition à moitié valide arriverait chez l'utilisateur sous forme de
@@ -2119,10 +2188,19 @@ function buildProposalOps(mapDoc0, changes){
     if(!hit) throw new Error(`${where}: no column "${v}" on this board. Use one of: ${cols.map(k => `"${k.name}" (${k.id})`).join(", ")}.`);
     return hit.id;
   };
+  // 🛂 D6 / D12, jugés contre les colonnes d'AVANT le lot ET contre celles du moment : une op `columns` plus tôt dans le même lot
+  // (« 🛂 To validate » renommée « Waiting », « Lost » renommée) ne lève pas la règle. Le refus de l'une suffit.
+  const cols0 = (mapDoc0 && mapDoc0.kanban && Array.isArray(mapDoc0.kanban.cols)) ? mapDoc0.kanban.cols : [];
+  const refuseCol = id => (id ? (agentColRefusal(colsNow(), id) || agentColRefusal(cols0, id)) : "");
+  // Cocher une CARTE la montre dans la colonne terminale, quelle que soit sa colonne : on juge donc la colonne terminale.
+  const refuseDone = ()=>{ for(const list of [colsNow() || [], cols0]){ const dc = list.find(k => k && k.done); const no = dc ? agentColRefusal(list, dc.id) : ""; if(no) return no; } return ""; };
   return changes.map((c, i)=>{
     const where = "change #" + (i+1);
     const op = String((c && c.op) || "").trim();
-    if(!INPUT_OPS.includes(op)) throw new Error(`${where}: unknown op "${op}". Use one of: ${INPUT_OPS.filter(x=>x !== "cols").join(", ")}.`);
+    if(!INPUT_OPS.includes(op)) throw new Error(`${where}: unknown op "${op}". Use one of: ${INPUT_OPS.filter(x=>x !== "cols" && x !== "collab").join(", ")}.`);
+    // 🤝 Le mode Collaboration (l'interrupteur, les éditeurs principaux, le statut d'une branche) est réglé par des PERSONNES sur la carte :
+    // l'app revérifie chaque op `collab` avec l'auteur du journal, et une proposition n'en a pas. Refusé ici, en le disant — comme `vote`.
+    if(op === "collab") throw new Error(`${where}: "collab" is set by people on the board, not proposed by Claude.`);
     if(op === "columns" || op === "cols"){
       // Les colonnes du tableau, en un bloc. Un tableau qui n'en a PAS reçoit `seed` : l'app pose ces
       // colonnes d'elle-même, sans écraser celles qu'un collègue aurait posées entre-temps. Un tableau
@@ -2229,7 +2307,21 @@ function buildProposalOps(mapDoc0, changes){
       // `col` facultatif (2026-10-12) : les cartes NEUVES vont dans cette colonne du kanban.
       // Validé comme pour `move` — une colonne inventée est refusée ICI, en nommant les vraies ;
       // un NOM de colonne est accepté et traduit en id (1.5.0).
-      if(c.col != null && c.col !== "") out.col = colRef(c.col, where);
+      if(c.col != null && c.col !== ""){
+        out.col = colRef(c.col, where);
+        const no = refuseCol(out.col);
+        if(no) throw new Error(`${where}: ${no}`);
+      }
+      // La copie de travail porte la colonne que l'APP donnera aux nœuds du haut du lot (`propApplyOps`) : sous une CARTE et sans
+      // `col`, ce sont ses sous-tâches (aucune colonne) ; ailleurs, la colonne demandée, sinon la première colonne ouverte
+      // (`kbAdoptNew`). Une op suivante du même lot (`check`) les juge donc comme l'app les montrera.
+      const cn = colsNow();
+      const topCol = cn ? ((r.node.col && !out.col) ? null : (out.col || (cn.find(k => k && !k.done) || cn[0] || {}).id || null)) : null;
+      if(topCol) forest.forEach(k => { if(!k.col) k.col = topCol; });
+      // 🛂 D6 : une carte qui naît COCHÉE s'affiche dans la colonne terminale.
+      if(topCol && forest.some(k => k.check === true)){ const no = refuseDone(); if(no) throw new Error(`${where}: ${no} (a “[x]” item is born ticked, in the done column).`); }
+      // 💼 D13 : aucune ligne « Contact: » de l'ajout ne porte une adresse ou un numéro.
+      (function w(list){ for(const k of list || []){ const no = contactRefusalText(k && k.text); if(no) throw new Error(`${where}: ${no}`); w(k && k.children); } })(forest);
       // La copie de travail reçoit les nœuds : une op suivante du même lot peut les viser.
       r.node.children = (r.node.children || []).concat(forest);
       // `assign` facultatif (2026-10-12, 👥) : le RESPONSABLE des cartes neuves. Mêmes bornes que l'op
@@ -2242,6 +2334,8 @@ function buildProposalOps(mapDoc0, changes){
     } else if(op === "rename"){
       if(typeof c.text !== "string" || !c.text.trim()) throw new Error(`${where}: \`text\` is required for a "rename".`);
       out.text = c.text.trim().slice(0, 2000);
+      const noC = contactRefusalText(out.text);
+      if(noC) throw new Error(`${where}: ${noC}`);
       r.node.text = out.text;
     } else if(op === "note"){
       if(typeof c.note !== "string") throw new Error(`${where}: \`note\` is required for a "note" (an empty string clears it).`);
@@ -2249,7 +2343,11 @@ function buildProposalOps(mapDoc0, changes){
     } else if(op === "check"){
       const v = c.value === "true" ? true : c.value === "false" ? false : c.value;
       if(typeof v !== "boolean") throw new Error(`${where}: \`value\` must be true or false for a "check".`);
+      // 🛂 D6 : la case d'une CARTE du tableau la met en Done (une carte cochée s'affiche dans la colonne terminale).
+      const noD = (v && r.node.col) ? refuseDone() : "";
+      if(noD) throw new Error(`${where}: ${noD}`);
       out.value = v;
+      r.node.check = v;
     } else if(op === "star"){
       // ⭐ Un signet de l'utilisateur, posé (par défaut) ou retiré (`value: false`). Il n'écrit rien dans la carte : la copie de
       // travail ne change pas. Le centre d'une carte n'est pas une carte qu'on retrouve dans ✅ My work : refusé ici, en le disant.
@@ -2288,6 +2386,10 @@ function buildProposalOps(mapDoc0, changes){
       const raw = String(c.col == null ? "" : c.col);
       if(!colsNow()) colRef(raw || "?", where);   // lève le message « pas encore de kanban »
       out.col = raw ? colRef(raw, where) : "";
+      const no = refuseCol(out.col);
+      if(no) throw new Error(`${where}: ${no}`);
+      // La copie de travail suit : une sous-tâche déplacée dans une colonne devient une carte, et un `check` suivant la jugera comme telle.
+      r.node.col = out.col || null;
     } else if(op === "tags"){
       // Les dix couleurs, liste FERMÉE — ≡ `okTags` de l'app. Une clé inventée est refusée ICI,
       // en nommant la liste, plutôt que de tomber en silence à la lecture. [] retire tout.
@@ -2349,6 +2451,8 @@ function buildProposalOps(mapDoc0, changes){
           covered.assign = true;
         }
       });
+      const noZ = refuseCol(plan.col);
+      if(noZ) throw new Error(`${where}: "place" lands in the zone ${zname(now.col)} — ${noZ}`);
       out.bx = pos.bx; out.by = pos.by;
       r.node.bx = pos.bx; r.node.by = pos.by;
       const implied = [];
@@ -2389,6 +2493,8 @@ function buildProposalOps(mapDoc0, changes){
       if(typeof c.value !== "string" || c.value.length > 400 || /[\x00-\x1f]/.test(c.value))
         throw new Error(`${where}: \`value\` is required for an "attr" — its value as text (400 characters max; "" removes the attribute).`);
       out.name = c.name.trim(); out.value = c.value.trim();
+      const noC = contactRefusal(out.name, out.value);
+      if(noC) throw new Error(`${where}: ${noC}`);
     } else if(op === "comment"){
       // Un commentaire est AJOUTÉ au fil de la carte, jamais substitué : la seule op qui ne
       // réécrit rien. Signé « Claude » par l'app (le `by` de la proposition), borné comme
@@ -2610,6 +2716,136 @@ function okDate(v){
     return (y >= 1970 && y <= 2100) ? v : null;
   }
 function kbStrOk(v, max){ return (typeof v === "string") ? v.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max) : ""; }
+// 🏗 COPIÉ de src/js/3145-blueprint.js (comparé par le test) : le connecteur VALIDE le blueprint, l'app le compile.
+const BP_KINDS = ["crm", "launch", "hiring", "ops"];
+const BP_LANES = ["human", "agent", "pair"];
+const BP_RECURS = ["d", "wd", "w", "2w", "m", "q", "y"];
+const BP_DELIVERABLES = ["sheet", "script", "press", "post", "reply", "slides", "email", "code", "research", "doc", "plan", "generic"];
+const BP_MAX = { work:120, systems:4, seed:30, accept:8, know:20, roles:12, why:6, risks:8, milestones:8, fields:4, opts:12, facts:6, deps:20, attrs:8 };
+// Un texte venu du modèle : une ligne, bornée, et JAMAIS un secret — compté dans `drop.secret`, jamais montré.
+function bpStr(v, max, drop){
+  const s = kbStrOk(v, max * 2).replace(/\s+/g, " ").trim().slice(0, max);
+  if(s && kbSecretLike(s)){ if(drop) drop.secret = (drop.secret || 0) + 1; return ""; }
+  return s;
+}
+// Une date : « wN » (une semaine de l'horizon) ou un vrai jour ISO — « 2026-02-31 » passe le motif et n'existe pas (la leçon
+// de `zem_safe_date`).
+function bpWhen(v, weeks){
+  if(typeof v !== "string") return "";
+  const t = v.trim(), w = /^w([0-9]{1,2})$/.exec(t);
+  if(w){ const n = +w[1]; return (n >= 1 && n <= weeks) ? "w" + n : ""; }
+  if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(t)) return "";
+  const d = new Date(t + "T00:00:00Z");
+  return (!isNaN(d.getTime()) && d.toISOString().slice(0, 10) === t) ? t : "";
+}
+// LA FRONTIÈRE, PURE : tout ce qui n'est pas sûr tombe, et ce qui tombe est COMPTÉ (l'aperçu le dit, jamais en silence).
+function bpClean(raw){
+  if(!raw || typeof raw !== "object" || raw.v !== 1) return null;
+  const drop = {};
+  const n = (k, c) => { drop[k] = (drop[k] || 0) + (c || 1); };
+  const list = (v, max, key) => { const a = Array.isArray(v) ? v : []; if(a.length > max) n(key, a.length - max); return a.slice(0, max); };
+  const name = bpStr(raw.name, 80, drop);
+  if(!name) return null;
+  const hz = (raw.horizon && typeof raw.horizon === "object") ? raw.horizon : {};
+  const weeks = (Number.isInteger(hz.weeks) && hz.weeks >= 1 && hz.weeks <= 26) ? hz.weeks : 6;
+  const horizon = { weeks }, start = bpWhen(hz.start, weeks);
+  if(/^[0-9]{4}/.test(start)) horizon.start = start;
+  const roles = [], roleKey = new Map();
+  for(const r of list(raw.roles, BP_MAX.roles, "roles")){
+    const role = bpStr(r && r.role, 40, drop);
+    if(!role || roleKey.has(role.toLowerCase())){ n("roles"); continue; }
+    const who = bpStr(r.who, 120, drop), x = who ? { role, who } : { role };
+    roleKey.set(role.toLowerCase(), role); roles.push(x);
+  }
+  const systems = [], kinds = new Set();
+  for(const s of list(raw.systems, BP_MAX.systems, "systems")){
+    if(!s || BP_KINDS.indexOf(s.kind) < 0 || kinds.has(s.kind)){ n("systems"); continue; }
+    kinds.add(s.kind);
+    const out = { kind: s.kind }, nm = bpStr(s.name, 60, drop);
+    if(nm) out.name = nm;
+    const fields = [];
+    for(const f of list(s.fields, BP_MAX.fields, "fields")){
+      const fn = bpStr(f && f.name, 40, drop);
+      if(!fn){ n("fields"); continue; }
+      // Une option ne contient jamais de virgule : c'est le séparateur d'un Multi (`shMultiList`).
+      const opts = list(f.opts, BP_MAX.opts, "opts").map(o => bpStr(o, 40, drop)).filter(o => o && o.indexOf(",") < 0);
+      fields.push({ name: fn, opts });
+    }
+    if(fields.length) out.fields = fields;
+    const seed = [];
+    for(const r of list(s.seed, BP_MAX.seed, "seed")){
+      const t = bpStr(r && r.title, 120, drop);
+      if(!t){ n("seed"); continue; }
+      const row = { title: t }, st = bpStr(r.stage, 40, drop), at = {};
+      if(st) row.stage = st;
+      let k = 0;
+      if(r.attrs && typeof r.attrs === "object") for(const key of Object.keys(r.attrs)){
+        if(k >= BP_MAX.attrs) break;
+        // « __proto__ » écrit comme clé changerait le PROTOTYPE de l'objet : refusé par son nom.
+        if(key === "__proto__" || key === "constructor" || key === "prototype"){ n("attrs"); continue; }
+        const an = bpStr(key, 40, drop), av = bpStr(String(r.attrs[key] == null ? "" : r.attrs[key]), 120, drop);
+        if(an && av && an.indexOf(":") < 0){ at[an] = av; k++; } else n("attrs");
+      }
+      if(k) row.attrs = at;
+      seed.push(row);
+    }
+    if(seed.length) out.seed = seed;
+    systems.push(out);
+  }
+  const work = [], ids = new Set();
+  for(const w of list(raw.work, BP_MAX.work, "work")){
+    const id = (w && typeof w.id === "string" && /^[a-z0-9_]{1,24}$/.test(w.id) && !ids.has(w.id)) ? w.id : "";
+    const title = bpStr(w && w.title, 120, drop);
+    if(!id || !title){ n("work"); continue; }
+    const it = { id, title, side: w.side === "run" ? "run" : "build", lane: BP_LANES.indexOf(w.lane) >= 0 ? w.lane : "human" };
+    const g = bpStr(w.group, 60, drop);
+    if(g) it.group = g;
+    const role = bpStr(w.role, 40, drop);
+    if(role){ if(roleKey.has(role.toLowerCase())) it.role = roleKey.get(role.toLowerCase()); else n("role"); }
+    if(BP_DELIVERABLES.indexOf(w.deliverable) >= 0) it.deliverable = w.deliverable;
+    const accept = list(w.accept, BP_MAX.accept, "accept").map(a => bpStr(a, 160, drop)).filter(Boolean);
+    if(accept.length) it.accept = accept;
+    // Seulement un élément ANTÉRIEUR : aucun cycle n'est possible, et une dépendance inventée tombe.
+    const rawDeps = list(w.deps, BP_MAX.deps, "deps"), deps = [];
+    for(const d of rawDeps){ if(typeof d === "string" && ids.has(d) && deps.indexOf(d) < 0) deps.push(d); else n("deps"); }
+    if(deps.length) it.deps = deps;
+    const st = bpWhen(w.start, weeks), due = bpWhen(w.due, weeks);
+    if(st) it.start = st;
+    if(due) it.due = due;
+    if(typeof w.est === "number" && w.est >= 0.5 && w.est <= 200) it.est = Math.round(w.est * 2) / 2;
+    if(it.side === "run" && BP_RECURS.indexOf(w.recur) >= 0) it.recur = w.recur;
+    if(kinds.has(w.system)) it.system = w.system;
+    // Un agent sans livrable ne sait pas quoi rendre : la tâche revient à un humain. Sans critères, il n'en fait que la moitié.
+    if(it.lane !== "human" && !it.deliverable){ it.lane = "human"; n("lane"); }
+    if(it.lane === "agent" && !it.accept){ it.lane = "pair"; n("lane"); }
+    ids.add(id); work.push(it);
+  }
+  const why = list(raw.why, BP_MAX.why, "why").map(t => bpStr(t, 200, drop)).filter(Boolean);
+  const risks = [];
+  for(const r of list(raw.risks, BP_MAX.risks, "risks")){
+    const t = bpStr(r && r.text, 200, drop);
+    if(!t){ n("risks"); continue; }
+    risks.push({ text: t, p: [1, 2, 3].indexOf(r.p) >= 0 ? r.p : 2 });
+  }
+  const milestones = [];
+  for(const m of list(raw.milestones, BP_MAX.milestones, "milestones")){
+    const t = bpStr(m && m.title, 120, drop), d = bpWhen(m && m.due, weeks);
+    if(!t || !d){ n("milestones"); continue; }
+    milestones.push({ title: t, due: d });
+  }
+  const know = [];
+  for(const k of list(raw.know, BP_MAX.know, "know")){
+    const nm = bpStr(k && k.name, 80, drop), sec = bpStr(k && k.section, 60, drop);
+    if(!nm || !sec || !KNOW_ENT_SEC.test(knowNorm(sec))){ n("know"); continue; }
+    const e = { name: nm, section: sec }, def = bpStr(k.definition, 300, drop);
+    if(def) e.definition = def;
+    const facts = list(k.facts, BP_MAX.facts, "facts").map(f => bpStr(f, 200, drop)).filter(Boolean);
+    if(facts.length) e.facts = facts;
+    know.push(e);
+  }
+  const lang = (raw.lang === "fr" || raw.lang === "en") ? raw.lang : "";
+  return { bp: { v: 1, lang, name, goal: bpStr(raw.goal, 200, drop), why, risks, roles, horizon, systems, work, milestones, know }, dropped: drop };
+}
 function okKbSeason(v){
     if(!v || typeof v !== "object" || Array.isArray(v)) return null;
     const name = kbStrOk(v.name, 60), goal = kbStrOk(v.goal, 200);
@@ -3035,8 +3271,32 @@ function hvFindEntry(section, text){ return (section.children || []).find(c=>hvS
 //  · LA BONNE CARTE. Deux « Company knowledge » dans un espace (un « Créer » de trop dans l'app) : on écrit
 //    dans celle qui porte le plus d'entrées, et la réponse le DIT — le connecteur ne lit pas la marque `know`.
 // ≡ app/index.html (le test compare) : les sections d'entrées, les noms d'alias et la clé d'un nom.
-const KNOW_ENT_SEC = /\b(projects?|projets?|products?|produits?|topics?|sujets?|themes?|clients?|people|personnes|company|companies|entreprises?|brands?|marques?|organi[sz]ations?|partners?|partenaires?|communit(y|ies)|communautes?)\b/;
+const KNOW_ENT_SEC = /\b(projects?|projets?|products?|produits?|topics?|sujets?|themes?|clients?|contacts?|people|personnes|company|companies|entreprises?|brands?|marques?|organi[sz]ations?|partners?|partenaires?|communit(y|ies)|communautes?)\b/;
 const KNOW_ALIAS_RE = /^(also known as|aka|alias(es)?|aussi appele|egalement appele|ancien nom|anciens noms|old names?)$/;
+const KNOW_CONTACT_SEC = /\b(contacts?|people|personnes)\b/;
+const KNOW_CHANNEL_RE = /^(e-?mail|mail|courriel|phone|tel|telephone|mobile|portable|whatsapp|linkedin|website|site web|site)$/;
+// ⏸ « En attente de » (contacts, lot 2) : COPIÉES de l'app, comparées par le test du connecteur.
+const KB_WAIT_NUDGE_S = 3 * 86400;
+function kbWaitCol(name){
+  return ["waiting", "waiting on client", "waiting on customer", "waiting for client", "waiting for customer", "waiting on them", "on hold",
+          "en attente", "attente", "attente client", "en attente client", "en attente du client", "blocked by client", "bloque par le client"].indexOf(kbColNorm(name)) >= 0;
+}
+function kbContactNames(n){
+  const a = attrsOf(n).find(x => x.name.toLowerCase() === KB_CONTACT_ATTR.toLowerCase());
+  return a ? shMultiList(a.val) : [];
+}
+function kbWaitOf(n, inh, cols, last){
+  if(!n || n.check === true) return null;
+  const col = n.col ? (cols || []).find(c => c && c.id === n.col) : null;
+  if(!(n.stat === "hold" || (col && !col.done && kbWaitCol(col.name)))) return null;
+  const own = kbContactNames(n), who = own.length ? own : (inh || []);
+  if(!who.length) return null;
+  // ✉️ Le dernier contact NOTÉ (`Last contact:`, posé par « Mark as sent » ou à la main) compte comme un mouvement : l'attente repart de lui.
+  const lc = attrsOf(n).find(x => x.name.toLowerCase() === "last contact"), d = lc ? okDate(lc.val) : null;
+  const since = Math.max(+last > 0 ? +last : 0, d ? Math.floor(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 1000) : 0);
+  return { who: who.slice(0, 6), since: since > 0 ? since : null };
+}
+function kbWaitPromptOf(w, now){ return w ? { who: w.who, days: w.since && now ? Math.floor((now - w.since) / 86400) : null } : null; }
 function knowKey(s){ return knowNorm(s).replace(/[^a-z0-9]+/g, ""); }
 // La section par défaut de chaque NATURE, et ce qui la reconnaît dans une carte existante.
 const KF_TYPES = {
@@ -3045,11 +3305,32 @@ const KF_TYPES = {
   topic:   ["🧭 Topics", /\b(topics?|sujets?|themes?)\b/],
   client:  ["💼 Clients & deals", /\bclients?\b/],
   person:  ["👤 People", /\b(people|personnes)\b/],
+  // 👤 Une personne HORS de l'équipe (contacts, lot 3) : la section « 👤 Contacts », ou une section People déjà là — l'app lit les deux
+  // comme des contacts (`KNOW_CONTACT_SEC`).
+  contact: ["👤 Contacts", KNOW_CONTACT_SEC],
   company: ["🏢 Company & brands", /\b(company|companies|entreprises?|brands?|marques?)\b/],
   partner: ["🤝 Partners & communities", /\b(partners?|partenaires?|communit(y|ies)|communautes?|organi[sz]ations?)\b/]
 };
 // 30 et non plus : le serveur prend 100 ops au plus par proposition (`supabase/functions/mcp`), et une
 // entrée MISE À JOUR en coûte trois (note, alias, faits) ; 30 × 3 + 7 sections = 97.
+// 👤 Les champs d'une fiche de contact, et le nom d'attribut que chacun écrit. Les canaux ne quittent jamais la fiche : l'app les
+// garde à part (`KNOW_CHANNEL_RE`) et ne les met dans aucun prompt.
+const KF_CONTACT_FIELDS = [["organisation", "Organisation"], ["role", "Role"], ["email", "Email"], ["phone", "Phone"], ["whatsapp", "WhatsApp"], ["linkedin", "LinkedIn"]];
+function kfContactAttrs(it, where){
+  const out = [];
+  for(const [k, label] of KF_CONTACT_FIELDS){
+    if(it[k] == null || it[k] === "") continue;
+    const v = hvLine(it[k], 200);
+    if(!v) continue;
+    if(/[,;]/.test(v) && k !== "organisation" && k !== "role") throw new Error(where + ": `" + k + "` holds ONE value.");
+    if(k === "email" && !/^[^\s@<>"'()]+@[^\s@<>"'()]+\.[^\s@<>"'()]+$/.test(v)) throw new Error(where + ": `email` “" + v + "” is not an e-mail address.");
+    if((k === "phone" || k === "whatsapp") && !/^\+?[\d\s().-]{6,24}$/.test(v)) throw new Error(where + ": `" + k + "` “" + v + "” is not a phone number.");
+    if(k === "linkedin" && !/^https:\/\/[^\s"'<>]+$/i.test(v)) throw new Error(where + ": `linkedin` must be an https:// link.");
+    if(kbSecretLike(v)) throw new Error(where + ": `" + k + "` looks like a password, key or token.");
+    out.push({ name: label, val: v });
+  }
+  return out;
+}
 const KF_MAX = 30, KF_OPS_MAX = 100, KF_BYTES_MAX = 380000, KF_DEF_MAX = 1500, KF_FACTS_MAX = 20, KF_ALIAS_MAX = 10;
 // Le nom court d'une section (« 📦 Products » → « products »), lu comme l'app (`kbKnowShort`).
 function kfShort(t){ let s = String(t || "").split(" — ")[0].trim(); const i = s.search(/[A-Za-zÀ-ÿ0-9]/); return knowNorm(i > 0 ? s.slice(i) : s); }
@@ -3200,6 +3481,7 @@ function kbKnowShort(t){
   return s.length > 22 ? s.slice(0, 21).trimEnd() + "…" : (s || String(t || "").trim());
 }
 const KB_ABOUT_ATTR = "About";
+const KB_CONTACT_ATTR = "Contact";
 const KNOW_ENT_PER = 3000, KNOW_ENT_ALL = 8000, KNOW_ENT_FULL = 3;
 function knowSpaced(s){ return knowNorm(s).replace(/[^a-z0-9]+/g, " ").trim(); }
 function knowEntities(json){
@@ -3210,24 +3492,25 @@ function knowEntities(json){
   const out = [];
   for(const s of d.root.children){
     if(!s || isAttr(s) || !KNOW_ENT_SEC.test(knowNorm(s.text))) continue;
-    const section = kbKnowShort(s.text);
+    const section = kbKnowShort(s.text), kind = KNOW_CONTACT_SEC.test(knowNorm(s.text)) ? "contact" : "topic";
     for(const e of (s.children || [])){
       // Un « Owner: … » posé sous la section est un attribut de la SECTION, pas une entrée.
       if(!e || typeof e.id !== "string" || isAttr(e)) continue;
       const name = String(e.text || "").trim();
       if(!name) continue;
-      const aliases = [], facts = [];
+      const aliases = [], facts = [], channels = [];
       (function w(list, depth){
         for(const c of (list || [])){
           if(!c) continue;
           const a = isAttr(c) ? attrSplit(c) : null;
           if(a && depth === 0 && KNOW_ALIAS_RE.test(knowNorm(a.name).trim())){ shMultiList(a.val).forEach(v => aliases.push(v)); continue; }
+          if(a && depth === 0 && KNOW_CHANNEL_RE.test(knowNorm(a.name).trim())){ if(a.val) channels.push({ name: a.name.trim(), val: a.val }); continue; }
           const t = String(c.text || "").trim(), nt = String(c.note || "").trim().replace(/\s*\n\s*/g, " ");
           if(t || nt) facts.push(t + (t && nt ? " — " : "") + nt);
           if(depth < 3) w(c.children, depth + 1);
         }
       })(e.children, 0);
-      out.push({ id: e.id, name, section, aliases, note: String(e.note || "").trim(), facts });
+      out.push({ id: e.id, name, section, kind, aliases, note: String(e.note || "").trim(), facts, channels });
     }
   }
   return out;
@@ -3244,17 +3527,20 @@ function knowMentioned(ents, text){
     return (!!s && sp.indexOf(" " + s + " ") >= 0) || (c.length >= 5 && cp.indexOf(c) >= 0);
   }));
 }
-function knowForCard(ents, chain){
+function knowForCard(ents, chain, attrs){
   const list = [], seen = new Set(), missing = [];
+  const names = (attrs || [KB_ABOUT_ATTR, KB_CONTACT_ATTR]).map(s => s.toLowerCase());
   (chain || []).forEach((c, i) => {
-    const a = attrsOf(c.node).find(x => x.name.toLowerCase() === KB_ABOUT_ATTR.toLowerCase());
-    if(!a) return;
-    for(const v of shMultiList(a.val)){
-      const e = knowEntityFind(ents, v);
-      if(!e){ if(i === 0) missing.push(v); continue; }
-      if(seen.has(e.id)) continue;
-      seen.add(e.id);
-      list.push({ e, how: i === 0 ? "card" : "inherited", from: i === 0 ? "" : String(c.label || "") });
+    for(const a of attrsOf(c.node)){
+      const nm = a.name.toLowerCase();
+      if(names.indexOf(nm) < 0) continue;
+      for(const v of shMultiList(a.val)){
+        const e = knowEntityFind(ents, v);
+        if(!e){ if(i === 0 && nm === KB_ABOUT_ATTR.toLowerCase()) missing.push(v); continue; }
+        if(seen.has(e.id)) continue;
+        seen.add(e.id);
+        list.push({ e, how: i === 0 ? "card" : "inherited", from: i === 0 ? "" : String(c.label || "") });
+      }
     }
   });
   const n = chain && chain[0] && chain[0].node;
@@ -3272,7 +3558,7 @@ function knowSourceOf(chain){
   }
   return null;
 }
-const CARD_PROMPT_MAX = 20000, CARD_PROMPT_KIND_ATTR = "Deliverable";
+const CARD_PROMPT_MAX = 20000, CARD_PROMPT_KIND_ATTR = "Deliverable", CARD_PROMPT_GATE_ATTR = "Gate";
 const CARD_PROMPT_KINDS = [
   { id:"sheet", ico:"📊", label:{ en:"Spreadsheet", fr:"Tableur" },
     re:/\b(sheets?|spreadsheets?|excel|tableurs?|xlsx|csv|gsheets?|feuilles? de calcul)\b/,
@@ -3290,6 +3576,68 @@ const CARD_PROMPT_KINDS = [
                  "Trois lignes d'exemple réalistes par onglet.",
                  "Les étapes pour le construire dans Google Sheets — et un Apps Script seulement s'il est vraiment nécessaire.",
                  "Les questions ouvertes auxquelles je dois répondre."] } },
+  { id:"script", ico:"🎬", label:{ en:"Video script", fr:"Script vidéo" },
+    re:/\b(storyboards?|voice-? ?overs?|voix off|podcasts?|reels?|youtube shorts?|screenplays?|videos? (?:scripts?|briefs?|storyboards?|edit|editing|montage|scenarios?)|(?:script|scenario|storyboard)s? (?:de |du |for |of |pour )?(?:la |le |the |a )?videos?|(?:record|film|shoot|tourner|enregistrer)\w* (?:(?:the|a|an|la|le|une?|our|notre|ma|mon) )?(?:[a-z0-9-]+ ){0,2}videos?|episodes? (?:scripts?|outlines?)|(?:write|draft|script|ecrire|rediger) (?:(?:the|an?|next|le|la) )?(?:[a-z0-9-]+ )?episodes?)\b/,
+    role:{ en:"You are a video scriptwriter. You write for the screen and the voice: short sentences, one idea per scene, nothing that cannot be filmed or said aloud.",
+           fr:"Tu es un scénariste vidéo. Tu écris pour l'écran et pour la voix : des phrases courtes, une idée par scène, rien qui ne se filme ou ne se dise pas à voix haute." },
+    format:{ en:["The promise of the video in one sentence, and the target length.",
+                 "The script, scene by scene: timing, what we see, what we hear, the text on screen.",
+                 "The hook for the first three seconds.",
+                 "The call to action.",
+                 "The shot list to film, or the images to find.",
+                 "The open questions."],
+             fr:["La promesse de la vidéo en une phrase, et la durée visée.",
+                 "Le script, scène par scène : minutage, ce qu'on voit, ce qu'on entend, le texte à l'écran.",
+                 "L'accroche des trois premières secondes.",
+                 "L'appel à l'action.",
+                 "La liste des plans à tourner, ou des images à trouver.",
+                 "Les questions ouvertes."] } },
+  { id:"press", ico:"📰", label:{ en:"Press release & pitch", fr:"Communiqué & pitch" },
+    re:/\b(press releases?|press kits?|press pitch|communiques?|communiques? de presse|journalistes?|journalists?|reporters?|dossiers? de presse|pitch presse|media (?:kits?|lists?|relations?|outreach|contacts?)|relations? presse)\b/,
+    role:{ en:"You are a press officer. You write for journalists: the fact first, a clear angle, no marketing fog.",
+           fr:"Tu es un attaché de presse. Tu écris pour les journalistes : le fait d'abord, un angle clair, aucun brouillard marketing." },
+    format:{ en:["The headline and the standfirst.",
+                 "The press release, under 400 words: the fact, why now, a quote, the figures, and an “About” paragraph.",
+                 "A five-sentence pitch, to personalise for each journalist.",
+                 "Three possible angles.",
+                 "What to check before sending.",
+                 "The open questions."],
+             fr:["Le titre et le chapeau.",
+                 "Le communiqué, en moins de 400 mots : le fait, pourquoi maintenant, une citation, les chiffres et un paragraphe « À propos ».",
+                 "Un pitch de cinq phrases, à personnaliser pour chaque journaliste.",
+                 "Trois angles possibles.",
+                 "Ce qu'il faut vérifier avant l'envoi.",
+                 "Les questions ouvertes."] } },
+  { id:"post", ico:"📣", label:{ en:"Social post", fr:"Publication sociale" },
+    re:/\b(social posts?|posts? (?:linkedin|instagram|tiktok|facebook)|^posts?(?= (?:on|about|announcing|sur|pour|de))(?! de blog)(?! (?:sur|on) (?:the |le |notre |our )?blog)|\b(?!(?:blog|newsletter)\b)[a-z0-9]+ posts?(?= (?:on|about|announcing|sur|pour|de))(?! de blog)(?! (?:sur|on) (?:the |le |notre |our )?blog)|linkedin|instagram|tiktok|(?:twitter|linkedin|social|x) threads?|tweets?|captions?|legendes?|reseaux sociaux|social media|publications? sociales?)\b/,
+    role:{ en:"You are a social media writer. You write posts that sound like a person, not like a brand, and that fit each network.",
+           fr:"Tu es un rédacteur réseaux sociaux. Tu écris des publications qui sonnent comme une personne, pas comme une marque, et qui conviennent à chaque réseau." },
+    format:{ en:["Three hooks to choose from.",
+                 "The text for each network asked for, at the right length for it.",
+                 "The visual or the video to produce, described.",
+                 "Hashtags, only if they help.",
+                 "The best time to publish, if it is known.",
+                 "The open questions."],
+             fr:["Trois accroches au choix.",
+                 "Le texte pour chaque réseau demandé, à la bonne longueur pour lui.",
+                 "Le visuel ou la vidéo à produire, décrit.",
+                 "Les hashtags, seulement s'ils servent.",
+                 "Le meilleur moment pour publier, s'il est connu.",
+                 "Les questions ouvertes."] } },
+  { id:"reply", ico:"💬", label:{ en:"Support reply", fr:"Réponse au client" },
+    re:/\b(repl(?:y|ies)|reponses? au client)\b|^(?!.*\b(data|analysis|analyses|analyse|analyser|analyze|analyzing|survey|surveys|report|reports|rapport|rapports|export|exports|list|lists|liste|listes|backlog|dashboard)\b).*\b(support tickets?|tickets? (?:support|client|customer)|helpdesk|customer (?:emails?|messages?|requests?|questions?)|refund (?:requests?|emails?|messages?|tickets?)|demandes? de remboursement|(?:answer|respond|repond)\w* (?:(?:to|the|a|an|our|this|le|la|les|au|aux|un|une|du|des|ce|cette) ){0,2}(?:[a-z0-9-]+ ){0,2}(?:customers?|clients?|tickets?|e-?mails?|mails?|courriels?|messages?|complaints?|reclamations?))\b/,
+    role:{ en:"You are a support agent who answers fast, accurately and like a human: the solution first, then the courtesy.",
+           fr:"Tu es un chargé de support qui répond vite, juste et de façon humaine : la solution d'abord, la politesse ensuite." },
+    format:{ en:["The reply, ready to send: in the brand's tone, the solution first.",
+                 "What is promised, and what is not.",
+                 "What must go to a human (escalation), and why.",
+                 "A help article to write, if the question keeps coming back.",
+                 "The open questions."],
+             fr:["La réponse, prête à envoyer : dans le ton de la marque, la solution d'abord.",
+                 "Ce qui est promis, et ce qui ne l'est pas.",
+                 "Ce qui doit passer à un humain (escalade), et pourquoi.",
+                 "Un article d'aide à écrire, si la question revient.",
+                 "Les questions ouvertes."] } },
   { id:"slides", ico:"🎞", label:{ en:"Slides", fr:"Présentation" },
     re:/\b(decks?|slides?|slideshow|presentations?|pitch|keynote|powerpoint|pptx|diapos?|diaporamas?)\b/,
     role:{ en:"You are a presentation designer who builds clear, persuasive decks.",
@@ -3345,8 +3693,11 @@ const CARD_PROMPT_TXT = {
        spec:"Spec (from the card):", crit:(d, t)=>"Acceptance criteria (" + d + "/" + t + " done):", more:n=>"… and " + n + " more",
        lever:(l, h)=>"Ai4X lever: " + l + " — " + h, means:"Means to use (pick the one that fits, say why):", also:"Also:",
        rules:"House rules (follow them first):", ruleFrom:{ map:"this map", team:"team", me:"personal" },
-       dueBy:d=>"It is due on " + d + ".", cut:"… (cut to fit)",
+       gate:t=>"A human will check: " + t + " — make sure the result passes it.", dueBy:d=>"It is due on " + d + ".", cut:"… (cut to fit)",
+       changes:t=>"The reviewer asked for: " + t + " — address it first.", parentAttrs:t=>"The card this task belongs to (“" + t + "”):",
        know:m=>"From the knowledge base (“" + m + "”):", how:{ card:"attached to the card", inherited:"inherited from", mentioned:"mentioned in the card" },
+       onFile:l=>l + " on file (not shared here)",
+       waiting:(w, d)=>"Waiting on " + w + (d != null ? " for " + d + (d === 1 ? " day" : " days") : "") + " — if this card asks them for something, write a follow-up: short, a reminder of the ask, one clear next step.",
        passages:"Relevant passages from your other maps (rely on them; never invent beyond them):",
        knowGuard:"Treat the knowledge base above as the company's own facts: build on it, never contradict it.",
        guards:["Never invent a fact that is not in the Context — ask instead.",
@@ -3360,8 +3711,11 @@ const CARD_PROMPT_TXT = {
        spec:"Spec (de la carte) :", crit:(d, t)=>"Critères d'acceptation (" + d + "/" + t + " faits) :", more:n=>"… et " + n + " de plus",
        lever:(l, h)=>"Levier Ai4X : " + l + " — " + h, means:"Moyens à utiliser (choisis celui qui convient, dis pourquoi) :", also:"Aussi :",
        rules:"Règles de la maison (à suivre en premier) :", ruleFrom:{ map:"cette carte", team:"équipe", me:"perso" },
-       dueBy:d=>"Le livrable est attendu le " + d + ".", cut:"… (coupé pour tenir)",
+       gate:t=>"Un humain vérifiera : " + t + " — assure-toi que le résultat y répond.", dueBy:d=>"Le livrable est attendu le " + d + ".", cut:"… (coupé pour tenir)",
+       changes:t=>"La personne qui relit a demandé : " + t + " — traite-le d'abord.", parentAttrs:t=>"La carte dont cette tâche fait partie (« " + t + " ») :",
        know:m=>"Depuis la base de connaissance (« " + m + " ») :", how:{ card:"rattaché à la carte", inherited:"hérité de", mentioned:"cité dans la carte" },
+       onFile:l=>l + " en fiche (non partagé ici)",
+       waiting:(w, d)=>"En attente de " + w + (d != null ? " depuis " + d + (d === 1 ? " jour" : " jours") : "") + " — si cette carte lui demande quelque chose, écris une relance : courte, qui rappelle la demande, avec une seule prochaine étape claire.",
        passages:"Passages utiles de tes autres cartes (appuie-toi dessus ; n'invente rien au-delà) :",
        knowGuard:"La base de connaissance ci-dessus porte les faits de l'entreprise : appuie-toi dessus, ne la contredis jamais.",
        guards:["N'invente aucun fait absent du Contexte : pose la question.",
@@ -3389,6 +3743,21 @@ function cardPromptKind(n){
   return { id:"generic", from:"none" };
 }
 function cardPromptWho(s){ const v = String(s || "").trim(); const i = v.indexOf("@"); return i > 0 ? v.slice(0, i) : v; }
+function cardPromptNoMail(s){ return String(s == null ? "" : s).replace(/([A-Za-z0-9._%+-]+)@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g, "$1"); }
+const PROP_CHANGES_PREFIX = "🛂 Changes asked: ";   // ≡ src/js/3280-claude-proposals.js (le test compare)
+const CARD_PROMPT_DELIVERY_RE = /^📄 [\s\S]* — (\d{4}-\d\d-\d\d)$/;
+function cardPromptChanges(n){
+  let last = "";
+  for(const c of (n && n.children) || []){ const m = CARD_PROMPT_DELIVERY_RE.exec(String((c && c.text) || "").trim()); if(m && m[1] > last) last = m[1]; }
+  let ask = null;
+  for(const c of (n && Array.isArray(n.cmts)) ? n.cmts : []){
+    const t = Math.floor(+(c && c.t));
+    if(!c || typeof c.text !== "string" || c.text.indexOf(PROP_CHANGES_PREFIX) !== 0 || !(t > 0 && t < 1e11)) continue;
+    if(!ask || t >= ask.t) ask = { t, text: c.text.slice(PROP_CHANGES_PREFIX.length).replace(/\s+/g, " ").trim() };
+  }
+  if(!ask || !ask.text) return "";
+  return (!last || new Date(ask.t * 1000).toISOString().slice(0, 10) >= last) ? ask.text : "";
+}
 function cardPromptCap(lines, budget, more){
   const out = []; let used = 0;
   for(let i = 0; i < lines.length; i++){
@@ -3408,6 +3777,9 @@ function cardPromptPlan(n, ctx){
   const one = (s, max) => { const t = clean(s); return t.length > max ? t.slice(0, max - 1) + "…" : t; };
   // --- Context ---
   const cx = [];
+  // 🛂 D8 : la demande de la personne qui relit passe EN TÊTE du contexte (elle a été écrite pour ce passage-ci).
+  const ask = one(cardPromptChanges(n), 1000);
+  if(ask) cx.push("- " + W.changes(ask));
   const where = [c.board ? W.board + ": " + one(c.board, 120) : "", c.col ? W.col + ": " + one(c.col, 60) : ""].filter(Boolean).join(" · ");
   if(where) cx.push("- " + where);
   if(c.parent) cx.push("- " + W.branch + ": " + one(c.parent, 160));
@@ -3417,11 +3789,21 @@ function cardPromptPlan(n, ctx){
                 n.priority ? W.prio + ": P" + n.priority : "",
                 okSecs(n.est) ? W.est + ": " + fmtDur(okSecs(n.est)) : ""].filter(Boolean).join(" · ");
   if(meta) cx.push("- " + meta);
+  // ⏸ La carte attend un contact (`kbWaitOf`) : le prompt le dit, avec l'âge connu — une relance ne s'écrit pas comme un premier message.
+  if(c.wait && Array.isArray(c.wait.who) && c.wait.who.length) cx.push("- " + W.waiting(c.wait.who.map(v => one(cardPromptNoMail(v), 80)).join(", "), c.wait.days != null ? c.wait.days : null));
   const tags = (c.tags || []).map(t => one(t, 40)).filter(Boolean);
   if(tags.length) cx.push("- " + W.labels + ": " + tags.join(", "));
-  const skip = new Set([KB_LEVER_ATTR, KB_FILED_ATTR, CARD_PROMPT_KIND_ATTR, KB_ABOUT_ATTR, KB_KNOWSRC_ATTR].map(s => s.toLowerCase()));
-  const at = attrsOf(n).filter(a => !skip.has(a.name.toLowerCase())).map(a => one(a.name + ": " + a.val, 200)).filter(Boolean);
+  const skip = new Set([KB_LEVER_ATTR, KB_FILED_ATTR, CARD_PROMPT_KIND_ATTR, CARD_PROMPT_GATE_ATTR, KB_ABOUT_ATTR, KB_KNOWSRC_ATTR].map(s => s.toLowerCase()));
+  const at = attrsOf(n).filter(a => !skip.has(a.name.toLowerCase())).map(a => one(a.name + ": " + cardPromptNoMail(a.val), 200)).filter(Boolean);
   if(at.length) cx.push(...cardPromptCap(at.map(a => "- " + a), 1200, W.more));
+  // 💼 Une SOUS-TÂCHE d'une carte du tableau (le travail d'agent sous une affaire du CRM) reçoit les attributs de sa carte : la
+  // sous-tâche ne porte que son titre, l'affaire porte l'entreprise, la valeur, l'étape suivante. Bornés, chaque ligne passe le filtre
+  // des secrets, une adresse est réduite à sa partie locale. Seulement quand le parent EST une carte (`col`) et l'enfant n'en est pas une.
+  const pc = c.parentCard;
+  if(pc && pc !== n && pc.col && !n.col){
+    const pa = attrsOf(pc).filter(a => !skip.has(a.name.toLowerCase())).map(a => one(a.name + ": " + cardPromptNoMail(a.val), 200)).filter(Boolean);
+    if(pa.length){ cx.push("- " + W.parentAttrs(one(pc.text, 120) || "—")); cx.push(...cardPromptCap(pa.map(a => "  - " + a), 800, W.more)); }
+  }
   if(c.link && c.link.url) cx.push("- " + W.link + ": " + one(c.link.url, 300));
   else if(c.link && c.link.name) cx.push("- " + W.linked + ": " + one(c.link.name, 120));
   // 📚 Les entrées de la base de connaissance (`knowForCard`) : trois en entier, les suivantes par
@@ -3431,10 +3813,14 @@ function cardPromptPlan(n, ctx){
     cx.push(""); cx.push(W.know(one(c.knowMap || KNOW_NAME, 80)));
     let used = 0;
     kn.forEach((k, i) => {
-      cx.push("#### " + one(k.name, 120) + (k.section ? " — " + one(k.section, 60) : "") + " (" + W.how[k.how] + (k.from ? " “" + one(k.from, 80) + "”" : "") + ")");
+      // 👤 Une fiche de contact dit QUELS canaux elle a (« Email, Phone on file »), jamais leurs valeurs : `channels` n'arrive
+      // ici qu'en NOMS. Une adresse écrite dans une note ou un fait est réduite à sa partie locale.
+      const ch = (k.channels || []).map(c => one(c, 30)).filter(Boolean);
+      cx.push("#### " + one(k.name, 120) + (k.section ? " — " + one(k.section, 60) : "") + " (" + W.how[k.how] + (k.from ? " “" + one(k.from, 80) + "”" : "") + ")"
+        + (ch.length ? " · " + W.onFile(ch.join(", ")) : ""));
       if(i >= KNOW_ENT_FULL || used >= KNOW_ENT_ALL) return;
-      const body = String(k.note || "").split("\n").filter(l => { if(kbSecretLike(l)){ stripped++; return false; } return true; });
-      (k.facts || []).forEach(f => { const t = one(f, 300); if(t) body.push("- " + t); });
+      const body = String(k.note || "").split("\n").filter(l => { if(kbSecretLike(l)){ stripped++; return false; } return true; }).map(cardPromptNoMail);
+      (k.facts || []).forEach(f => { const t = one(cardPromptNoMail(f), 300); if(t) body.push("- " + t); });
       let txt = body.join("\n").trim();
       const cap = Math.min(KNOW_ENT_PER, KNOW_ENT_ALL - used);
       if(txt.length > cap) txt = txt.slice(0, cap) + "\n" + W.cut;
@@ -3461,7 +3847,9 @@ function cardPromptPlan(n, ctx){
     tk.push(W.means); means.forEach(m => tk.push("- " + kbLeverMeansText(m)));
   }
   // --- Guardrails ---
-  const gd = W.guards.map((g, i) => (i + 1) + ". " + g);
+  const gateA = attrsOf(n).find(a => a.name.toLowerCase() === CARD_PROMPT_GATE_ATTR.toLowerCase());
+  const gate = gateA ? one(gateA.val, 300) : "";
+  const gd = (gate ? [W.gate(gate)] : []).concat(W.guards).map((g, i) => (i + 1) + ". " + g);
   if(n.due) gd.push((gd.length + 1) + ". " + W.dueBy(n.due));
   // 📖 Les passages des autres cartes, sous leur propre budget ; chaque ligne passe le filtre des secrets.
   const pas = Array.isArray(c.passages) ? c.passages : [];
@@ -3643,11 +4031,21 @@ function cpContext(m, lib, card, opts){
   const tagNames = kbTagNames(doc);
   return { lang: o.lang === "fr" ? "fr" : "en", kind: o.kind || "", board: n === root ? "" : String(root.text || ""), col: cpColName(doc, n),
            parent: (card.parent && card.parent !== root) ? card.parent.text : "",
+           parentCard: (card.parent && card.parent !== root) ? card.parent : null,
            owners: String(n.assign || "").split(/[,;]/).map(s=>s.trim()).filter(Boolean),
            tags: (Array.isArray(n.tags) ? n.tags : []).map(k=>tagNames[k]).filter(Boolean), link, rules,
            knowMap: km ? km.name + (src ? " · " + src.label : "") : "", knowMissing: kr.missing, knowGone: gone ? src.label : "",
-           knowledge: kr.list.map(x=>({ name:x.e.name, section:x.e.section, how:x.how, from:x.from, note:x.e.note, facts:x.e.facts })),
-           passages: knowPick(files, q.join("\n"), CARD_PROMPT_PASSAGES).map(p=>({ path: p.path, excerpt: p.excerpt })) };
+           knowledge: kr.list.map(x=>({ name:x.e.name, section:x.e.section, how:x.how, from:x.from, note:x.e.note, facts:x.e.facts, channels:(x.e.channels || []).map(c=>c.name) })),
+           passages: knowPick(files, q.join("\n"), CARD_PROMPT_PASSAGES).map(p=>({ path: p.path, excerpt: p.excerpt })), wait: cpWait(doc, card) };
+}
+// ⏸ L'attente de la carte, comme `kbWaitHere` de l'app : le contact du plus proche ancêtre, le dernier mouvement connu du journal.
+function cpWait(doc, card){
+  const k = doc.kanban || {}, n = card.node;
+  let inh = [];
+  for(const c of (card.chain || []).slice(1)){ const v = kbContactNames(c.node); if(v.length){ inh = v; break; } }
+  let last = 0;
+  for(const e of (Array.isArray(k.log) ? k.log : [])) if(Array.isArray(e) && e[1] === n.id && +e[0] > last) last = +e[0];
+  return kbWaitPromptOf(kbWaitOf(n, inh, Array.isArray(k.cols) ? k.cols : [], last), Math.floor(Date.now() / 1000));
 }
 // Un livrable long est rangé en PARTIES (une op `note` porte 8000 caractères au plus chez l'app), coupées à
 // un paragraphe quand c'est possible — jamais au milieu d'un mot.
@@ -3855,6 +4253,37 @@ const TOOLS = [
     }, required:["name"], additionalProperties:false }
   },
   {
+    name: "plan_system",
+    description: "Plans a whole PROJECT in TabTree from a brief, in one call, and lets the user build it with one click in the app. "
+      + "You write a blueprint: the work (each item human, agent or pair — an agent or pair item needs a deliverable and acceptance criteria), "
+      + "Build (project work) and Run (recurring) sides, epics, roles, milestones, and the systems the project needs (crm, launch, hiring, ops — each becomes a sheet + pipeline tab). "
+      + "TabTree creates an empty board named after the project and shows the plan on the user's library screen; the user adjusts the horizon, how much Claude takes, the systems and who holds each role, then clicks Build it. "
+      + "Nothing appears until TabTree is open on one of the user's devices. Never invent people, e-mail addresses, clients or figures: only names written in the brief. "
+      + "Work-item ids: a-z, 0-9 and _ only. Dates: \"w1\"… within the horizon, or a real day YYYY-MM-DD.",
+    inputSchema: { type:"object", required:["name", "work"], properties:{
+      name:{ type:"string", description:"The project's name, 2–6 words." },
+      lang:{ type:"string", enum:["en", "fr"] },
+      goal:{ type:"string", description:"What must be true at the end — one sentence. It becomes the sprint goal." },
+      why:{ type:"array", items:{ type:"string" } },
+      risks:{ type:"array", items:{ type:"object", properties:{ text:{ type:"string" }, p:{ type:"integer", enum:[1, 2, 3] } } } },
+      roles:{ type:"array", items:{ type:"object", properties:{ role:{ type:"string" }, who:{ type:"string", description:"A name or e-mail WRITTEN in the brief; omit otherwise." } } } },
+      horizon:{ type:"object", properties:{ weeks:{ type:"integer", minimum:1, maximum:26 }, start:{ type:"string" } } },
+      systems:{ type:"array", items:{ type:"object", properties:{
+        kind:{ type:"string", enum: BP_KINDS }, name:{ type:"string" },
+        fields:{ type:"array", items:{ type:"object", properties:{ name:{ type:"string" }, opts:{ type:"array", items:{ type:"string" } } } } },
+        seed:{ type:"array", description:"Records NAMED in the brief (a lead, a candidate, a ticket).", items:{ type:"object", properties:{ title:{ type:"string" }, stage:{ type:"string" }, attrs:{ type:"object" } } } } } } },
+      work:{ type:"array", items:{ type:"object", required:["id", "title"], properties:{
+        id:{ type:"string" }, title:{ type:"string" }, side:{ type:"string", enum:["build", "run"] }, group:{ type:"string" },
+        lane:{ type:"string", enum: BP_LANES }, role:{ type:"string" }, deliverable:{ type:"string", enum: BP_DELIVERABLES },
+        accept:{ type:"array", items:{ type:"string" } }, deps:{ type:"array", items:{ type:"string" } },
+        start:{ type:"string" }, due:{ type:"string" }, est:{ type:"number", description:"Hours." }, recur:{ type:"string", enum: BP_RECURS },
+        system:{ type:"string", enum: BP_KINDS, description:"Only for an item that IS a record of that system." } } } },
+      milestones:{ type:"array", items:{ type:"object", properties:{ title:{ type:"string" }, due:{ type:"string" } } } },
+      know:{ type:"array", items:{ type:"object", properties:{ name:{ type:"string" }, section:{ type:"string" }, definition:{ type:"string" }, facts:{ type:"array", items:{ type:"string" } } } } },
+      space:{ type:"string", description:"The space to create the project in (a name). Default: Personal." }
+    } }
+  },
+  {
     name: "propose_changes",
     description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, a ⭐ star for the user, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Changes that rewrite or remove what someone wrote — rename, note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
       + "STEERING A 🗂 PROJECT (format projet) — no extra tool, four safe changes: (1) read_map and use its “🗂 Project” block — the live sprint's counts and the Backlog ranked by ICE = Impact × Confidence × (6 − Effort), from the cards' (or their epic's) `Impact:` / `Confidence:` / `Effort:` attributes; (2) plan the next sprint by pulling the top of that ranking from Backlog into “To do” with `move` — keep the work-in-progress to about 6 committed cards in total (committed = everything off Backlog), fewer if some are still Doing; (3) set the running sprint's goal with { op: \"season\", goal: \"…\", name: \"Sprint 2\" } — it lands in the 🎯 chip and the 🏁 panel, by itself when nobody typed one, for review otherwise (set \"Sprint length\" / \"Sprints start\" once on the ROOT with `attr`); (4) settle a bet with { op: \"attr\", target: \"<epic text>\", name: \"Verdict\", value: \"validated\" } — untested, testing, validated or invalidated. Give each change a `why`. Add a new epic with `add` under “🧱 Epics” (its four attribute lines and its cards in one markdown), a decision with `add` under “📝 Decisions”, and turn an existing map into a project with { op: \"format\", format: \"projet\" }. The user closes a sprint in TabTree's 🏁 panel; the connector never closes one."
@@ -3863,7 +4292,7 @@ const TOOLS = [
       file:{ type:"string", description:"The map to change — a file name (or map name) from list_maps" },
       note:{ type:"string", description:"One line telling the user what this proposal does and why. Shown above the changes." },
       changes:{ type:"array", description:"The proposed changes, applied in order", items:{ type:"object", properties:{
-        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","start","attr","comment","est","lever","link","star","columns","format","season","place","add_image","add_shape","add_text","resize","label","arrange"], description:"On a BOARD only: add_image, add_shape, add_text, resize, label, arrange — and move / delete with an element id as target (see the tool description). On a mind map or kanban: columns = set the kanban columns (give `columns`; no target) — on a map with no kanban yet this creates the board; format = set the map's living format (give `format`; no target) — \"projet\" turns it into a 🗂 project, \"\" back to a plain mind map; season = set the RUNNING sprint's goal (give `goal`, optionally `name` = the sprint's name; no target) — the goal the 🎯 chip and the 🏁 panel show, kept until the user closes the sprint; applied by itself when nobody typed one, otherwise sent for review; add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column; pic = put an illustration on it; img = put a SCREENSHOT on it (give `file`, the path of the image on this machine — or `data`; `img: \"\"` removes it); persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) or a Second Brain Blueprint (“Second brain —”) from an interview — no target; tags = set the card's colour labels; assign = who the task is for; priority = 1 (highest) to 6; due = the due day; attr = set a “Name: value” attribute on the node (an estimate, a budget…); comment = add a signed comment to the card's thread (give `text`); est = set the time ESTIMATE of the task (give `est`, e.g. \"2h\", \"45\" = 45 minutes, \"\" removes it); place = put a kanban card on the free board (give `x` and `y`, its top-left corner, whole numbers within ±50000) — a shape there named after a column, a day or a person is a ZONE and TabTree writes that field itself, so the move / assign / due the zone implies are added for you; start = the start day; lever = the card's Ai4X lever (give `lever`); link = put a link on the node (give `link`); star = put a ⭐ on the card for the user — a personal bookmark that shows on the card and in their ✅ My work, applied by itself (`value: false` removes it)" },
+        op:{ type:"string", enum:["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","start","attr","comment","est","lever","link","star","columns","format","season","place","add_image","add_shape","add_text","resize","label","arrange"], description:"On a BOARD only: add_image, add_shape, add_text, resize, label, arrange — and move / delete with an element id as target (see the tool description). On a mind map or kanban: columns = set the kanban columns (give `columns`; no target) — on a map with no kanban yet this creates the board; format = set the map's living format (give `format`; no target) — \"projet\" turns it into a 🗂 project, \"\" back to a plain mind map; season = set the RUNNING sprint's goal (give `goal`, optionally `name` = the sprint's name; no target) — the goal the 🎯 chip and the 🏁 panel show, kept until the user closes the sprint; applied by itself when nobody typed one, otherwise sent for review; add = new children under `target`; rename = change its text; note = set its note; check = tick/untick the task; delete = remove it and its children; move = send the card to a kanban column (never to Done on a board that has a review column such as “🛂 To validate” — put the card there and a human moves it on; never to Won or Lost on a sales pipeline); pic = put an illustration on it; img = put a SCREENSHOT on it (give `file`, the path of the image on this machine — or `data`; `img: \"\"` removes it); persona = re-cast a work map canvas (a board whose name starts with “Work map —” / “Cartographie —”) or a Second Brain Blueprint (“Second brain —”) from an interview — no target; tags = set the card's colour labels; assign = who the task is for; priority = 1 (highest) to 6; due = the due day; attr = set a “Name: value” attribute on the node (an estimate, a budget…); comment = add a signed comment to the card's thread (give `text`); est = set the time ESTIMATE of the task (give `est`, e.g. \"2h\", \"45\" = 45 minutes, \"\" removes it); place = put a kanban card on the free board (give `x` and `y`, its top-left corner, whole numbers within ±50000) — a shape there named after a column, a day or a person is a ZONE and TabTree writes that field itself, so the move / assign / due the zone implies are added for you; start = the start day; lever = the card's Ai4X lever (give `lever`); link = put a link on the node (give `link`); star = put a ⭐ on the card for the user — a personal bookmark that shows on the card and in their ✅ My work, applied by itself (`value: false` removes it)" },
         target:{ type:"string", description:"Exact node text, or \"Ancestor > Node\" if ambiguous (not used by persona). On a board: an element id from read_map (sh:2, im:7, st:0) or the exact name of an image" },
         inside:{ type:"string", description:"add_image: the shape to put it in (sh:2). Without x and y it is laid out below what the shape holds, never overlapping" },
         row:{ type:"integer", description:"add_image with inside: optional grid row, from 0 — counted below what the shape already holds. Give row and col to every image of that shape, or to none" },
@@ -3938,8 +4367,14 @@ const TOOLS = [
       space:   { type:"string", description:"The space whose knowledge base to fill, by name (list_maps shows them). Omit for Personal. Knowledge never crosses spaces: if two could apply, ASK the user." },
       entries: { type:"array", description:"The objects to add or update, 30 at most.", items:{ type:"object", properties:{
         name:       { type:"string", description:"Its name, as people write it on cards — e.g. \"Ai4Sales\", \"Hidden Tokens\". 120 characters max." },
-        type:       { type:"string", enum:Object.keys(KF_TYPES), description:"Which section it goes in: project, product, topic, client, person, company (the company and its brands) or partner (partners, communities, associations). Default: topic." },
-        section:    { type:"string", description:"Optional: an EXACT section name instead of `type` (read_map shows them). It must be an entry section — its name says projects, products, topics, clients, people, company, brands, partners or communities." },
+        type:       { type:"string", enum:Object.keys(KF_TYPES), description:"Which section it goes in: project, product, topic, client, person, contact (a person OUTSIDE the team — a client's buyer, a supplier, a partner — with the fields below), company (the company and its brands) or partner (partners, communities, associations). Default: topic." },
+        organisation: { type:"string", description:"contact only: their company or organisation." },
+        role:       { type:"string", description:"contact only: their role or title." },
+        email:      { type:"string", description:"contact only: their e-mail address. Kept on the contact card in TabTree; never put into a prompt." },
+        phone:      { type:"string", description:"contact only: their phone number. Kept on the contact card; never put into a prompt." },
+        whatsapp:   { type:"string", description:"contact only: their WhatsApp number, if it differs or is the channel they prefer." },
+        linkedin:   { type:"string", description:"contact only: their LinkedIn profile, an https:// link." },
+        section:    { type:"string", description:"Optional: an EXACT section name instead of `type` (read_map shows them). It must be an entry section — its name says projects, products, topics, clients, contacts, people, company, brands, partners or communities." },
         definition: { type:"string", description:"What it is, in 2 to 5 sentences a newcomer understands: what it does, for whom, its status. This is the context every card prompt will carry. 1500 characters max." },
         aliases:    { type:"array", items:{ type:"string" }, description:"Other names it goes by — old names, abbreviations, spellings (e.g. [\"Nanomizer\"]). 10 at most." },
         facts:      { type:"array", items:{ type:"string" }, description:"Short facts worth knowing, one per line — a price, a date, an owner, a link. \"Name: value\" lines become attributes. 20 at most, 300 characters each." }
@@ -3948,24 +4383,24 @@ const TOOLS = [
   }
   ,{
     name: "card_prompt",
-    description: "Reads ONE card of a TabTree kanban or mind map and returns the prompt TabTree's 🪄 builds for it — Role, Context (board, column, owner, dates, labels, the knowledge-base entries the card is about, relevant passages from the user's other maps in the same space), Task (the card, its spec, its acceptance criteria), Guardrails and Format (picked from the deliverable: spreadsheet, slides, email, code, research, document, plan). Use it when the user asks you to work on, do or prepare a card (\"work on the card X\"). Then do the work following that prompt, and send the result back with deliver_card. Read-only.",
+    description: "Reads ONE card of a TabTree kanban or mind map and returns the prompt TabTree's 🪄 builds for it — Role, Context (board, column, owner, dates, labels, the knowledge-base entries the card is about, relevant passages from the user's other maps in the same space), Task (the card, its spec, its acceptance criteria — and, when the reviewer sent the card back, their last request, first in the Context), Guardrails and Format (picked from the deliverable: spreadsheet, slides, email, code, research, document, plan). Use it when the user asks you to work on, do or prepare a card (\"work on the card X\"). Then do the work following that prompt, and send the result back with deliver_card. Read-only.",
     inputSchema: { type:"object", properties:{
       file: { type:"string", description:"The map (a kanban or a mind map), as list_maps names it." },
       card: { type:"string", description:"The card: its exact text as read_map shows it (\"Parent > Card\" when two cards share it), or its id." },
-      kind: { type:"string", enum:["sheet","slides","email","code","research","doc","plan","generic"], description:"Optional: the deliverable, when the card does not say it (spreadsheet, slides, email, code, research, document, plan, other)." },
+      kind: { type:"string", enum:CARD_PROMPT_KINDS.map(k=>k.id), description:"Optional: the deliverable, when the card does not say it (spreadsheet, slides, email, code, research, document, plan, video script, press release, social post, support reply, other)." },
       lang: { type:"string", enum:["en","fr"], description:"The language of the prompt's headings and guardrails (default en). The card's own words are never translated." }
     }, required:["file","card"], additionalProperties:false }
   }
   ,{
     name: "deliver_card",
-    description: "Sends your finished work on a card back to TabTree, ON that card, for the user's approval: the deliverable becomes a 📄 entry under the card (its note holds your result, in Markdown), with optional next-step sub-tasks, and the card can move to another column (e.g. \"Review\"). Nothing is written until the user approves it in TabTree — one banner, one click, Cmd+Z undoes it. Use it after card_prompt, once the deliverable is ready. Never put a password, key or token in it.",
+    description: "Sends your finished work on a card back to TabTree, ON that card, for the user's approval: the deliverable becomes a 📄 entry under the card (its note holds your result, in Markdown), with optional next-step sub-tasks, and the card moves to the board's review column when it has one (e.g. \"🛂 To validate\") — or to the column you name, never Done on such a board, never Won or Lost on a sales pipeline (a human moves it there). Nothing is written until the user approves it in TabTree — one banner, one click, Cmd+Z undoes it. Use it after card_prompt, once the deliverable is ready. Never put a password, key or token in it.",
     inputSchema: { type:"object", properties:{
       file:     { type:"string", description:"The map, as card_prompt named it." },
       card:     { type:"string", description:"The card's id from card_prompt (or its exact text)." },
       result:   { type:"string", description:"The deliverable itself, in Markdown — what the user asked the card to produce. 30000 characters max; a long one is stored in parts." },
       title:    { type:"string", description:"Optional: a short name for the deliverable, e.g. \"Pricing sheet structure\" (default \"Result from Claude\"). 120 characters max." },
       subtasks: { type:"array", items:{ type:"string" }, description:"Optional: the next steps left to the user, one per item — they become unticked sub-tasks of the card. 20 at most." },
-      move_to:  { type:"string", description:"Optional: a column of the board the card should move to once the user approves (its name, e.g. \"Review\")." },
+      move_to:  { type:"string", description:"Optional: a column of the board the card should move to once the user approves (its name, e.g. \"Review\"). Left out, a card goes to the board's review column when it has one (e.g. \"🛂 To validate\"); \"\" leaves it where it is. Never Done on a board that has a review column, never Won or Lost on a sales pipeline: a human moves it there." },
       note:     { type:"string", description:"Optional: one line shown on TabTree's banner." }
     }, required:["file","card","result"], additionalProperties:false }
   }
@@ -3986,6 +4421,7 @@ const TOOL_ANNOTATIONS = {
   plant_project:   { title: "Plant a project as a tree",           readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   create_board:    { title: "Create a whiteboard",                 readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   create_kanban:   { title: "Create a kanban board",               readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  plan_system:     { title: "Plan a whole system from a brief (built after review)", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   propose_changes: { title: "Change a map (safe changes apply, others wait for review)", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   harvest:         { title: "Keep what matters from this conversation", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   fill_knowledge:  { title: "Fill the company knowledge base",     readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -4023,7 +4459,9 @@ const HANDLERS = {
       + (m.team && m.role === "viewer" ? "\n\n(You can read this team board but not change it — the user's role in its space is viewer.)"
         : "\n\n(To change this board, use propose_changes with `file: \"" + m.file + "\"` and these ids: add_image, add_shape, add_text, move, resize, label, arrange"
           + (CLOUD ? " are applied by TabTree itself; delete waits for the user's approval.)" : ", delete. Nothing is applied until the user approves it in TabTree.)"));
-    const ctx = { cols: (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [], tagNames: kbTagNames(m.doc), maps };
+    const last = new Map();
+    for(const e of ((m.doc.kanban && Array.isArray(m.doc.kanban.log)) ? m.doc.kanban.log : [])) if(Array.isArray(e) && typeof e[1] === "string" && +e[0] > (last.get(e[1]) || 0)) last.set(e[1], +e[0]);
+    const ctx = { cols: (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [], tagNames: kbTagNames(m.doc), maps, last };
     // Le rappel sur propose_changes vit ici et pas dans la description de l'outil : c'est au
     // moment où le plan est sous les yeux qu'il est utile, et il porte la règle de désignation.
     const ro = m.team && m.role === "viewer";
@@ -4124,6 +4562,26 @@ const HANDLERS = {
     const chosen = args.species && args.species !== P.diag.key ? `\nYou asked for a ${sp}; the project's shape alone says ${TREE_SPECIES_NAMES[P.diag.key] || "oak"}: ${why}` : `\nIt grows as a ${sp}: ${why}`;
     return `🌳 Planted “${P.doc.root.text}” — ${P.branches} branch(es), ${P.tasks} task(s)` + (P.why || P.risks ? `, roots: ${P.why} reason(s) and ${P.risks} risk(s)` : "") + `.`
       + chosen + `\nTell the user which tree their project is and why — that is the sentence to share. In TabTree, ⌘K “Tree: watch it grow again” replays the growth, and “Tree: timelapse video of this project” films it.\n${file}\n${importHint()}`;
+  },
+  async plan_system(args){
+    if(!CLOUD) throw new Error("plan_system needs the TabTree account (a connector key): TabTree builds the system in the app. Open TabTree → ⚙️ Settings → Account → Claude connector.");
+    const raw = Object.assign({}, args, { v: 1 });
+    delete raw.space;
+    const c = bpClean(raw);
+    if(!c) throw new Error("The blueprint needs a `name`.");
+    const dropped = Object.keys(c.dropped).reduce((a, k)=>a + c.dropped[k], 0);
+    if(!c.bp.work.length && !c.bp.systems.length)
+      throw new Error("The blueprint has no work item and no system left after checking (" + dropped + " item(s) dropped: " + JSON.stringify(c.dropped) + ").");
+    // La maison VIDE : c'est sur elle que la proposition est déposée (une proposition vise toujours une carte).
+    const doc = buildKanbanDoc({ name: c.bp.name, cards: [] });
+    const info = await writeDoc(c.bp.name, doc, null, { kind: "kanban", space: args.space, info: true });
+    const map = { file: info.id, key: info.key, owner: info.owner, team: info.team, name: c.bp.name };
+    await writeProposal(map, "🏗 " + c.bp.name, [{ op: "bp", bp: c.bp }], { review: true, extra: { origin: "blueprint", title: c.bp.name } });
+    const lanes = c.bp.work.reduce((o, w)=>{ o[w.lane] = (o[w.lane] || 0) + 1; return o; }, {});
+    return `🏗 Planned “${c.bp.name}” — ${c.bp.work.length} work item(s) (${lanes.agent || 0} for Claude, ${lanes.pair || 0} paired, ${lanes.human || 0} for people)`
+      + (c.bp.systems.length ? `, systems: ${c.bp.systems.map(s=>s.kind).join(", ")}` : "") + "."
+      + (dropped ? `\n${dropped} item(s) were left out by TabTree's checks: ${JSON.stringify(c.dropped)}.` : "")
+      + `\nTell the user: an empty board “${c.bp.name}” is in their library, and the plan waits on the library screen of TabTree — they can change the horizon, how much Claude takes, the systems and who holds each role, then click “Build it”. Nothing is built until they click, and nothing appears until TabTree is open on one of their devices.`;
   },
   async create_board(args){
     const elements = await resolveImageUrls(args.elements, "elements", e=>e.kind === "image");
@@ -4370,7 +4828,7 @@ const HANDLERS = {
       if(/[:,]/.test(name)) throw new Error(where + ": “" + name + "” — a name holds no colon and no comma (TabTree would read it as an attribute or as two names).");
       if(it.type != null && it.type !== "" && !KF_TYPES[it.type]) throw new Error(where + ": `type` must be one of " + Object.keys(KF_TYPES).join(", ") + ".");
       const section = hvLine(it.section, 80);
-      if(section && !KNOW_ENT_SEC.test(knowNorm(section))) throw new Error(where + ": “" + section + "” is not an entry section — TabTree's prompts only read sections whose name says projects, products, topics, clients, people, company, brands, partners or communities. Use `type` instead.");
+      if(section && !KNOW_ENT_SEC.test(knowNorm(section))) throw new Error(where + ": “" + section + "” is not an entry section — TabTree's prompts only read sections whose name says projects, products, topics, clients, contacts, people, company, brands, partners or communities. Use `type` instead.");
       const definition = (typeof it.definition === "string" ? it.definition.replace(/\r/g, "").slice(0, KF_DEF_MAX) : "").split("\n")
         .filter(l=>{ if(kbSecretLike(l)){ secrets++; return false; } return true; }).join("\n").trim();
       if(!definition) throw new Error(where + ": `definition` is required — 2 to 5 sentences saying what “" + name + "” is.");
@@ -4380,7 +4838,9 @@ const HANDLERS = {
       const facts = [];
       for(const v of (Array.isArray(it.facts) ? it.facts : [])){ const f = hvLine(v, 300); if(!f) continue; if(kbSecretLike(f)){ secrets++; continue; } facts.push(f); }
       if(facts.length > KF_FACTS_MAX) throw new Error(where + ": " + facts.length + " facts — " + KF_FACTS_MAX + " at most.");
-      return { i, name, type: KF_TYPES[it.type] ? it.type : "topic", section, definition, aliases, facts };
+      const attrs = kfContactAttrs(it, where);
+      if(attrs.length && it.type !== "contact") throw new Error(where + ": organisation, role, email, phone, whatsapp and linkedin are for `type: \"contact\"` only.");
+      return { i, name, type: KF_TYPES[it.type] ? it.type : "topic", section, definition, aliases, facts, attrs };
     });
     const dupKey = new Map();
     for(const x of clean){ for(const v of [x.name].concat(x.aliases)){ const k = knowKey(v), p = dupKey.get(k); if(p != null && p !== x.i) throw new Error("entries #" + (p + 1) + " and #" + (x.i + 1) + " are the same object (“" + v + "”) — send it once."); dupKey.set(k, x.i); } }
@@ -4424,8 +4884,17 @@ const HANDLERS = {
           else e.children = (e.children || []).concat([makeNode(nom + ": " + all.join(", "))]);
           did.push(plus.length + " alias" + (plus.length > 1 ? "es" : ""));
         }
+        const extra = [];
+        for(const ad of (x.attrs || [])){
+          const node = (e.children || []).find(c=>{ const kv = kfAttr(c); return kv && knowNorm(kv.name).trim() === knowNorm(ad.name).trim(); });
+          if(!node){ extra.push(ad.name + ": " + ad.val); continue; }
+          if(kfAttr(node).val === ad.val) continue;
+          t.ops.push(Object.assign({ op:"attr" }, at, { name: kfAttr(node).name, value: ad.val, hv: x.i }));
+          node.text = kfAttr(node).name + ": " + ad.val;
+          did.push(ad.name);
+        }
         const have = new Set(hit.facts.map(f=>knowNorm(f).trim()));
-        const newFacts = x.facts.filter(f=>!have.has(knowNorm(f).trim()));
+        const newFacts = extra.concat(x.facts.filter(f=>!have.has(knowNorm(f).trim())));
         if(newFacts.length){
           t.ops.push(Object.assign({ op:"add" }, at, { markdown: newFacts.map(f=>"- " + hvMd(f)).join("\n"), text: newFacts[0], adds: newFacts.length, hv: x.i }));
           e.children = (e.children || []).concat(newFacts.map(f=>makeNode(f)));
@@ -4444,7 +4913,7 @@ const HANDLERS = {
       }
       const path = String(root.text) + " > " + String(sec.text);
       const nid = newNid();
-      const kids = (x.aliases.length ? ["Also known as: " + x.aliases.join(", ")] : []).concat(x.facts);
+      const kids = (x.aliases.length ? ["Also known as: " + x.aliases.join(", ")] : []).concat((x.attrs || []).map(ad=>ad.name + ": " + ad.val), x.facts);
       t.ops.push(Object.assign({ op:"add" }, hvAt(sec, path), { markdown: "- " + hvMd(x.name) + kids.map(k=>"\n  - " + hvMd(k)).join(""), text: x.name, nid, adds: 1 + kids.length, hv: x.i }));
       t.ops.push({ op:"note", node: nid, target: (path + " > " + x.name).slice(0, 600), note: x.definition, hv: x.i });
       const node = Object.assign(makeNode(x.name), { id: nid, note: x.definition });
@@ -4510,15 +4979,28 @@ const HANDLERS = {
     const title = hvLine(a.title, 120) || "Result from Claude";
     if(kbSecretLike(title)) throw new Error("`title` looks like a password, key or token. Never put a secret on a card.");
     const subs = [];
-    for(const s of (Array.isArray(a.subtasks) ? a.subtasks : [])){ const t = hvLine(s, 200); if(!t) continue; if(kbSecretLike(t)){ secrets++; continue; } subs.push(t); }
+    for(const s of (Array.isArray(a.subtasks) ? a.subtasks : [])){
+      const t = hvLine(s, 200); if(!t) continue; if(kbSecretLike(t)){ secrets++; continue; }
+      const noC = contactRefusalText(t);
+      if(noC) throw new Error("A sub-task: " + noC + " Nothing was sent.");
+      subs.push(t);
+    }
     if(subs.length > CP_SUBTASKS_MAX) throw new Error(subs.length + " sub-tasks — " + CP_SUBTASKS_MAX + " at most. Keep the next steps that matter.");
-    let col = null;
+    let col = null, byDefault = false;
+    const cols = (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [];
     if(a.move_to != null && String(a.move_to).trim()){
-      const cols = (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [];
       if(!cols.length) throw new Error("“" + m.name + "” has no kanban columns, so the card cannot move. Leave `move_to` out.");
       const v = String(a.move_to).trim().toLowerCase();
       col = cols.find(k=>k.id === a.move_to) || cols.find(k=>String(k.name).trim().toLowerCase() === v);
       if(!col) throw new Error("No column “" + a.move_to + "” on this board. Use one of: " + cols.map(k=>"“" + k.name + "”").join(", ") + ".");
+      // 🛂 D6 / D12 : Done (sur un tableau qui a une colonne « à valider »), Won et Lost (sur un CRM) sont des gestes humains.
+      const no = agentColRefusal(cols, col.id);
+      if(no) throw new Error(no + " Nothing was sent.");
+    } else if(a.move_to == null && card.node.col && card.node.check !== true){
+      // 🛂 D6 : par défaut, un livrable met la CARTE dans la colonne « à valider » du tableau quand il en a une — jamais une
+      // sous-tâche (elle deviendrait une carte), jamais une carte qu'un humain a déjà cochée. `move_to: ""` la laisse où elle est.
+      const rc = agentReviewCol(cols);
+      if(rc && rc.id !== card.node.col){ col = rc; byDefault = true; }
     }
     const today = new Date().toISOString().slice(0, 10);
     const parts = cpParts(result), at = hvAt(card.node, card.path), ops = [];
@@ -4531,13 +5013,13 @@ const HANDLERS = {
     // Sans `text` : chez l'app, le `text` d'un ajout REMPLACE la première ligne et retire sa case (`propApplyOps`) — la première
     // sous-tâche serait arrivée sans case à cocher (vu par l'autotest de l'app).
     if(subs.length) ops.push(Object.assign({ op:"add" }, at, { markdown: subs.map(t=>"- [ ] " + hvMd(t)).join("\n"), adds: subs.length, why: "The next steps Claude left to you" }));
-    if(col) ops.push(Object.assign({ op:"move" }, at, { was: String(card.node.text || ""), col: col.id, why: "Ready for “" + col.name + "”" }));
+    if(col) ops.push(Object.assign({ op:"move" }, at, { was: String(card.node.text || ""), col: col.id, why: byDefault ? "Waiting for you to validate it" : "Ready for “" + col.name + "”" }));
     const res = await writeProposal(m, hvLine(a.note, 300) || "🪄 Claude's work on “" + hvLine(card.node.text, 120) + "”", ops,
                                     { review: true, extra: { origin: "card", title: hvLine(card.node.text, 120) } });
     return "📮 Your work on “" + card.node.text + "” is waiting in TabTree (map “" + m.name + "”" + (CLOUD ? "" : ", " + res.ids.review) + "):\n"
       + "   • 📄 " + title + (parts.length > 1 ? " — in " + parts.length + " parts" : "") + "\n"
       + (subs.length ? "   • " + subs.length + " sub-task(s) to tick\n" : "")
-      + (col ? "   • the card moves to “" + col.name + "”\n" : "")
+      + (col ? "   • the card moves to “" + col.name + "”" + (byDefault ? " (the board's review column: a human validates it and moves it to Done)" : "") + "\n" : "")
       + (secrets ? "🔒 " + secrets + " line(s) looked like a password, key or token and were left out.\n" : "")
       + "NOTHING is on the card yet. TabTree shows a banner on that map" + (CLOUD ? " within a minute (app open, signed in)" : " (backup folder connected, app open)") + ": the user reviews it and applies it in one click; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting for their approval in TabTree — do not claim it is on the card.";
@@ -4566,7 +5048,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.19.0" }
+      serverInfo: { name: "tabtree", version: "1.21.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse

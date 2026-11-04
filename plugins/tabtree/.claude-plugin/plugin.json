@@ -1,6 +1,6 @@
 {
   "name": "tabtree",
-  "version": "1.19.0",
+  "version": "1.21.0",
   "description": "Ties a Claude Code session to one TabTree card: Claude knows what it is working on, even after /clear, and your commits land on the card.",
   "author": { "name": "TabTree", "url": "https://tabtree.app" },
   "homepage": "https://tabtree.app/connector",
