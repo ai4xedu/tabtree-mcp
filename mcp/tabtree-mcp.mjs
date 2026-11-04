@@ -4070,6 +4070,541 @@ async function cpMapAndCard(args, write){
   return { m, card: cpFindCard(m.doc, args.card) };
 }
 
+// 📊 1.22.0 — LES CHIFFRES D'UN TABLEAU (`board_numbers`). COPIES CONFORMES de l'app (burnup, Flow, ce qui bloque, prévision, agents),
+// comparées déclaration par déclaration par le test du connecteur (`BN_HEADS`) : un changement d'un côté exige l'autre dans le même commit.
+function okKanbanCols(v){
+  if(!Array.isArray(v)) return null;
+  const seen = new Set();
+  return v
+    .filter(c => c && typeof c.id === "string" && /^[\w-]{1,24}$/.test(c.id) && typeof c.name === "string" && !seen.has(c.id) && seen.add(c.id))
+    .slice(0, 12)
+    .map(c => ({ id: c.id, name: String(c.name).slice(0, 60), done: c.done ? true : undefined,
+                 // Frontière de confiance : un plafond venu d'un fichier est borné comme tout
+                 // le reste — un « wip: 1e9 » ne doit pas écrire une pastille de dix chiffres.
+                 wip: (parseInt(c.wip, 10) >= 1 && parseInt(c.wip, 10) <= 99) ? parseInt(c.wip, 10) : undefined }));
+}
+function okKbLog(v){
+  if(!Array.isArray(v)) return [];
+  const max = Math.floor(Date.now() / 1000) + 2 * 86400;
+  const out = [];
+  for(const e of v){
+    if(!Array.isArray(e) || e.length < 3) continue;
+    const t = Math.floor(+e[0]), id = e[1], c = e[2];
+    if(!(t >= 1577836800 && t <= max)) continue;
+    if(typeof id !== "string" || !/^[A-Za-z0-9_]{1,40}$/.test(id)) continue;
+    if(typeof c !== "string" || !/^(~?[\w-]{1,24}|-|)$/.test(c)) continue;
+    out.push(e[4] ? [t, id, c, e[3] ? 1 : 0, 1] : [t, id, c, e[3] ? 1 : 0]);
+  }
+  return out.slice(-3000);
+}
+function kbBacklogCol(cols){ return (cols || []).find(c => !c.done && kbColKin(c.name) === 3) || null; }
+function kbStartedCols(cols){
+  const open = (cols || []).filter(c => !c.done);
+  const kin = new Set(open.filter(c => { const k = kbColKin(c.name); return k === 1 || k === 2; }).map(c => c.id));
+  return kin.size ? kin : new Set(open.slice(1).map(c => c.id));
+}
+const KB_SIDE_NAMES = { build: ["build", "construction", "construire"], run: ["run", "exploitation", "ops", "operations"] };
+function kbSideKind(name){
+  const v = kbColNorm(name);
+  return KB_SIDE_NAMES.build.indexOf(v) >= 0 ? "build" : KB_SIDE_NAMES.run.indexOf(v) >= 0 ? "run" : null;
+}
+function kbSidesOf(n){
+  if(!n || !Array.isArray(n.children)) return null;
+  let build = null, run = null;
+  for(const c of n.children){ const k = kbSideKind(c.text); if(k === "build" && !build) build = c; else if(k === "run" && !run) run = c; }
+  return (build && run) ? { build, run } : null;
+}
+function kbBurnIndex(log){
+  const m = new Map();
+  for(const e of (log || [])){ let l = m.get(e[1]); if(!l) m.set(e[1], l = []); l.push(e); }
+  for(const l of m.values()) l.sort((a, b) => a[0] - b[0]);
+  return m;
+}
+function kbStateAt(n, es, t){
+  let last = null;
+  for(const e of (es || [])){ if(e[0] > t) break; last = e; }
+  if(last) return { on: last[2] !== "" && last[2] !== "-", col: (last[2] && last[2] !== "-") ? last[2] : null, done: !!last[3] };
+  if(!es || !es.length) return { on: !!n.col, col: n.col || null, done: n.check === true };
+  if(es[0][4]) return { on: false, col: null, done: false };
+  return { on: true, col: null, done: false };
+}
+function kbBurnup(scope, cols, log, season, P, now, unit){
+  if(!scope || !P || !(P.start > 0) || P.notStarted) return null;
+  const start = Math.min(P.start, now);
+  const bl = kbBacklogCol(cols), blId = bl ? bl.id : null;
+  const colIds = new Set((cols || []).map(c => c.id));
+  const S = season || {};
+  const plan = new Set(S.plan || []), at = S.at || 0, planned = !!(at || plan.size);
+  const idx = kbBurnIndex(log);
+  // Les cartes de la face : tout nœud qui porte une colonne, ou que le journal a vu passer (une carte sortie du tableau).
+  const cards = [];
+  (function w(n){
+    if(n !== scope && (n.col || idx.has(n.id))) cards.push(n);
+    (n.children || []).forEach(w);
+  })(scope);
+  const ent = new Map();
+  for(const [id, es] of idx){ const e = es.find(x => x[4]); if(e) ent.set(id, e[0]); }
+  // Une carte déjà FAITE au début du sprint n'en est pas : ni dans le périmètre, ni dans le fait.
+  const doneAtStart = new Set();
+  for(const n of cards){ const s = kbStateAt(n, idx.get(n.id), start); if(s.on && s.done) doneAtStart.add(n.id); }
+  const hasEst = cards.some(n => !doneAtStart.has(n.id) && okSecs(n.est) > 0);
+  const u = (unit === "est" && hasEst) ? "est" : "cards";
+  const weight = n => u === "est" ? okSecs(n.est) : 1;
+  const inScope = (n, s, t) => {
+    if(doneAtStart.has(n.id) || !s.on) return false;
+    if(s.col && !colIds.has(s.col) && s.col[0] !== "~") return false;
+    if(planned){
+      if(plan.has(n.id)) return true;
+      const en = ent.get(n.id) || 0;
+      return !!(at && en > at && en <= t && !(blId && !s.done && s.col === blId));
+    }
+    return !(blId && !s.done && s.col === blId);
+  };
+  const sample = t => {
+    let sc = 0, dn = 0;
+    for(const n of cards){
+      const s = kbStateAt(n, idx.get(n.id), t);
+      if(!inScope(n, s, t)) continue;
+      const wgt = weight(n);
+      sc += wgt; if(s.done) dn += wgt;
+    }
+    return { t, scope: sc, done: dn };
+  };
+  const soFar = kbDaysBetween(start, now) + 1;
+  const total = Math.min(90, Math.max(soFar, P.length || 0));
+  const pts = [sample(start)];
+  for(let i = 0; i < Math.min(soFar, 90); i++){
+    const t = Math.min(kbDayAdd(start, i + 1), now);
+    if(t <= pts[pts.length - 1].t) continue;
+    pts.push(sample(t));
+  }
+  const end = P.end != null ? Math.max(P.end, now) : kbDayAdd(start, total);
+  // « Depuis le jour 1 » se lit à la FIN du premier jour : un sprint qui commence à minuit n'a encore rien reçu à 0 h.
+  const first = pts[0], last = pts[pts.length - 1];
+  const out = { start, end, now, length: P.length || null, planEnd: P.end != null ? P.end : null, unit: u, hasEst,
+                pts, scope0: (pts[1] || first).scope, scopeNow: last.scope, doneNow: last.done, proj: null };
+  // La projection : le rythme moyen par JOUR depuis le début, prolongé depuis maintenant. Rien avant un jour plein.
+  const elapsed = (now - start) / 86400;
+  if(elapsed >= 1 && last.done > 0){
+    const rate = last.done / elapsed, rest = Math.max(0, last.scope - last.done);
+    out.proj = { rate, finish: rest ? Math.round(now + rest / rate * 86400) : now,
+                 short: (P.end != null && P.end > now) ? Math.max(0, rest - rate * (P.end - now) / 86400) : null };
+    if(out.proj.short != null) out.proj.short = u === "est" ? Math.round(out.proj.short) : (Math.ceil(out.proj.short - 1e-9) || 0);
+  }
+  if(!cards.length && !(log || []).length) return null;
+  return out;
+}
+const KB_DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const GT_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function kbDayLabel(t){ const d = new Date(t * 1000); return KB_DOW[d.getDay()] + " " + d.getDate() + " " + GT_MONTHS[d.getMonth()]; }
+function kbBurnLine(B){
+  if(!B) return "";
+  const v = x => B.unit === "est" ? fmtDur(x) : String(x);
+  let s = v(B.doneNow) + " of " + v(B.scopeNow) + " done";
+  if(B.scopeNow !== B.scope0) s += " · scope " + (B.scopeNow > B.scope0 ? "+" : "−") + v(Math.abs(B.scopeNow - B.scope0)) + " since day 1";
+  if(B.proj){
+    if(B.doneNow >= B.scopeNow) s += " · all done";
+    else if(B.proj.short != null && B.proj.short > 0) s += " · at this pace " + v(B.proj.short) + " short at the planned end";
+    else s += " · at this pace done around " + kbDayLabel(B.proj.finish);
+  }
+  return s;
+}
+function kbSeasonPlanBits(P, now){
+  const over = P.end != null && now >= P.end;
+  const ago = over ? P.day - P.length : 0;
+  if(P.notStarted) return { day: "starts " + kbDayLabel(P.start), head: "Sprint " + P.n + " starts " + kbDayLabel(P.start), over: false };
+  if(over){ const a = ago <= 1 ? "ended yesterday" : "ended " + ago + " days ago"; return { day: a, head: "Sprint " + P.n + " " + a, over: true }; }
+  if(P.length) return { day: "day " + P.day + "/" + P.length, head: "Sprint " + P.n + " · day " + P.day + " of " + P.length, over: false };
+  return { day: "day " + P.day, head: "Sprint " + P.n + " · since " + kbDayLabel(P.start), over: false };
+}
+function tagsOf(n){ return (n && Array.isArray(n.tags)) ? n.tags : []; }
+const KB_TAGS = {
+  green:  { label:"Green",  col:"#4ade80" },
+  yellow: { label:"Yellow", col:"#facc15" },
+  orange: { label:"Orange", col:"#fb923c" },
+  red:    { label:"Red",    col:"#f87171" },
+  purple: { label:"Purple", col:"#c084fc" },
+  blue:   { label:"Blue",   col:"#60a5fa" },
+  sky:    { label:"Sky",    col:"#22d3ee" },
+  lime:   { label:"Lime",   col:"#a3e635" },
+  pink:   { label:"Pink",   col:"#f472b6" },
+  gray:   { label:"Gray",   col:"#94a3b8" },
+};
+function depsOf(n){ return (n && Array.isArray(n.deps)) ? n.deps : []; }
+function nodeIndex(r){ const m = new Map(); (function w(n){ m.set(n.id, n); n.children.forEach(w); })(r); return m; }
+function depsBlocking(n, byId){
+  const out = [];
+  for(const id of depsOf(n)){ const p = byId.get(id); if(p && p.check !== true) out.push(p); }
+  return out;
+}
+function kbBlocked(r, cols){
+  const colIds = new Set((cols || []).map(c => c.id)), byId = nodeIndex(r), out = [];
+  (function w(n){
+    if(n !== r && n.col && colIds.has(n.col) && n.check !== true){
+      const txt = String(n.text || "").slice(0, 120), who = String(n.assign || "");
+      if(n.stat === "block") out.push([n.id, txt, who, "block", ""]);
+      else {
+        const wait = depsBlocking(n, byId);
+        if(wait.length) out.push([n.id, txt, who, "waits", String(wait[0].text || "").slice(0, 120)]);
+      }
+    }
+    n.children.forEach(w);
+  })(r);
+  return out.slice(0, 200);
+}
+function kbAgentCards(r, cols, log, since){
+  const colById = new Map((cols || []).map(c => [c.id, c])), ticked = new Set();
+  for(const e of (log || [])) if(e[3] && e[0] > since) ticked.add(e[1]);
+  const carrying = [], done = [];
+  (function w(n){
+    if(n !== r && n.col && colById.has(n.col)){
+      const ag = assignList(n.assign || "").map(agentOf).find(Boolean);
+      if(ag){
+        const txt = String(n.text || "").slice(0, 120);
+        if(n.check === true){ if(ticked.has(n.id)) done.push([n.id, txt, ag]); }
+        else carrying.push([n.id, txt, colById.get(n.col).name || "", ag]);
+      }
+    }
+    n.children.forEach(w);
+  })(r);
+  return { carrying: carrying.slice(0, 50), done: done.slice(0, 50) };
+}
+function kbAgentLine(c){
+  if(!c || !(+c.n > 0)) return "";
+  const parts = [], s = (k, one, many) => { const v = +c[k] || 0; if(v) parts.push(v + " " + (v === 1 ? one : many)); };
+  s("auto", "change landed without a click", "changes landed without a click");
+  s("applied", "proposal applied after review", "proposals applied after review");
+  s("changes", "sent back with changes asked", "sent back with changes asked");
+  s("rejected", "proposal rejected", "proposals rejected");
+  s("waiting", "waits for review", "wait for review");
+  return (+c.n) + " " + (+c.n === 1 ? "proposal" : "proposals") + (parts.length ? " — " + parts.join(" · ") : "");
+}
+function kbPct(xs, p){
+  const v = xs.filter(x => x != null).sort((a, b) => a - b);
+  return v.length ? v[Math.min(v.length - 1, Math.max(0, Math.ceil(p * v.length) - 1))] : null;
+}
+function kbFlow(r, cols, log, now, tagNames){
+  const C = cols || [], colIds = new Set(C.map(c => c.id)), dc = C.find(c => c.done) || null;
+  const firstOpen = (C.find(c => !c.done) || {}).id || null;
+  const started = kbStartedCols(C);
+  const idx = kbBurnIndex(log);
+  const cards = [];
+  (function w(n){ if(n !== r && (n.col || idx.has(n.id))) cards.push(n); n.children.forEach(w); })(r);
+  // ── Le flux cumulé : 30 fins de journée, le nombre de cartes par colonne (une carte cochée vit dans Done).
+  const days = [];
+  for(let i = 29; i >= 0; i--) days.push(i === 0 ? now : kbDayStart(now) - (i - 1) * 86400);
+  const cfd = days.map(t => {
+    const per = {};
+    for(const c of C) per[c.id] = 0;
+    for(const n of cards){
+      const s = kbStateAt(n, idx.get(n.id), t);
+      if(!s.on) continue;
+      const col = (s.done && dc) ? dc.id : (s.col && colIds.has(s.col) ? s.col : (s.col == null ? firstOpen : null));
+      if(col && per[col] != null) per[col]++;
+    }
+    return { t, per };
+  });
+  // ── Le cycle des 30 derniers jours : de la première colonne de TRAVAIL à la coche (la règle de `kbDash`).
+  const cycles = [];
+  for(const [id, es] of idx){
+    for(const e of es){
+      if(!e[3] || now - e[0] < 0 || now - e[0] >= 30 * 86400) continue;
+      let debut = null;
+      for(const x of es){ if(x[0] > e[0]) break; if(!x[3] && started.has(x[2])){ debut = x[0]; break; } }
+      if(debut != null && debut <= e[0]) cycles.push(e[0] - debut);
+    }
+  }
+  const p50 = kbPct(cycles, 0.5), p85 = kbPct(cycles, 0.85);
+  // ── L'âge du travail EN COURS : depuis la dernière entrée dans le travail (une colonne de travail après autre chose).
+  const aging = [];
+  for(const n of cards){
+    if(!n.col || !started.has(n.col) || n.check === true) continue;
+    const es = idx.get(n.id) || [];
+    let since = null;
+    for(let i = es.length - 1; i >= 0; i--){
+      if(es[i][3] || !started.has(es[i][2])) break;
+      since = es[i][0];
+    }
+    if(since == null) continue;   // jamais vu entrer dans le travail : on ne devine pas son âge
+    aging.push([n.id, String(n.text || "").slice(0, 120), n.col, Math.max(0, now - since), String(n.assign || "")]);
+  }
+  aging.sort((a, b) => b[3] - a[3]);
+  // ── La plage : huit semaines glissantes, la meilleure et la plus lente non nulle.
+  const weeks = new Array(8).fill(0), seenW = new Set();
+  let first = null;
+  for(const e of (log || [])) if(first == null || e[0] < first) first = e[0];
+  const hist = first == null ? 0 : Math.min(8, Math.floor((now - first) / (7 * 86400)));
+  for(const e of (log || [])){
+    if(!e[3]) continue;
+    const age = now - e[0]; if(age < 0 || age >= hist * 7 * 86400) continue;
+    const wk = Math.floor(age / (7 * 86400)), key = e[1] + "|" + wk;
+    if(!seenW.has(key)){ seenW.add(key); weeks[wk]++; }
+  }
+  const full = weeks.slice(0, hist), nz = full.filter(x => x > 0);
+  let open = 0;
+  for(const n of cards) if(n.col && colIds.has(n.col) && n.check !== true) open++;
+  const range = (nz.length && open) ? { open, best: Math.max(...nz), slow: Math.min(...nz),
+                                        fast: Math.round(open / Math.max(...nz) * 10) / 10, late: Math.round(open / Math.min(...nz) * 10) / 10, hist } : null;
+  // ── Les étiquettes : ouvertes, faites en 30 jours, cycle médian.
+  const doneAt = new Map();
+  for(const [id, es] of idx) for(const e of es) if(e[3] && now - e[0] < 30 * 86400 && now >= e[0]) doneAt.set(id, e[0]);
+  const cyc = new Map();
+  for(const [id, es] of idx){
+    const f = doneAt.get(id); if(f == null) continue;
+    let debut = null;
+    for(const x of es){ if(x[0] > f) break; if(!x[3] && started.has(x[2])){ debut = x[0]; break; } }
+    if(debut != null) cyc.set(id, f - debut);
+  }
+  const tags = new Map();
+  for(const n of cards){
+    if(!n.col || !colIds.has(n.col)) continue;
+    for(const k of tagsOf(n)){
+      let o = tags.get(k);
+      if(!o) tags.set(k, o = { key: k, name: (tagNames && tagNames[k]) || (KB_TAGS[k] ? KB_TAGS[k].label : k), open: 0, done30: 0, cyc: [] });
+      if(n.check !== true) o.open++;
+      if(doneAt.has(n.id)){ o.done30++; if(cyc.has(n.id)) o.cyc.push(cyc.get(n.id)); }
+    }
+  }
+  const tagRows = [...tags.values()].map(o => ({ key: o.key, name: o.name, open: o.open, done30: o.done30, med: kbPct(o.cyc, 0.5) }))
+    .sort((a, b) => (b.open + b.done30) - (a.open + a.done30) || (a.name < b.name ? -1 : 1));
+  return { cfd, cols: C.map(c => ({ id: c.id, name: c.name, done: !!c.done })), p50, p85, cycles: cycles.length,
+           aging, range, tags: tagRows, blocked: kbBlocked(r, C), agent: kbAgentCards(r, C, log, now - 7 * 86400) };
+}
+function kbFlowRangeLine(R){
+  if(!R) return "";
+  const w = x => x <= 1 ? "about a week" : x + " weeks";
+  return R.fast === R.late ? R.open + " open → " + w(R.fast) : R.open + " open → between " + w(R.fast) + " and " + w(R.late);
+}
+function dateAddDays(v, n){
+  const t = new Date(v + "T00:00:00Z");
+  t.setUTCDate(t.getUTCDate() + n);
+  return t.toISOString().slice(0, 10);
+}
+function kbForecast(r, cols, log, now, today){
+  const colById = new Map((cols || []).map(c => [c.id, c]));
+  const rank = new Map((cols || []).map((c, i) => [c.id, i]));
+  let first = null;
+  for(const e of (log || [])) if(e[0] <= now && (first == null || e[0] < first)) first = e[0];
+  const hist = first == null ? 0 : Math.min(4, Math.floor((now - first) / (7 * 86400)));
+  const weeks = new Array(Math.max(1, hist)).fill(0), seen = new Set();
+  for(const e of (log || [])){
+    if(!e[3]) continue;
+    const age = now - e[0];
+    if(age < 0 || age >= weeks.length * 7 * 86400) continue;
+    const wk = Math.floor(age / (7 * 86400)), key = e[1] + "|" + wk;
+    if(!seen.has(key)){ seen.add(key); weeks[wk]++; }
+  }
+  const open = [];
+  (function w(n){
+    if(n.col && colById.has(n.col) && n.check !== true) open.push(n);
+    n.children.forEach(w);
+  })(r);
+  open.sort((a, b) => (rank.get(b.col) - rank.get(a.col)));   // stable : l'ordre du document départage
+  const out = { open: open.length, hist, weeks, perWeek: null, weeksLeft: null, date: null, atRisk: [] };
+  if(hist < 1) return out;
+  const sorted = weeks.slice().sort((a, b) => a - b);
+  const med = sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+  if(!(med > 0)) return out;
+  out.perWeek = med;
+  out.weeksLeft = Math.round(open.length / med * 10) / 10;
+  out.date = dateAddDays(today, Math.ceil(open.length / med * 7));
+  open.forEach((n, i) => {
+    const likely = dateAddDays(today, Math.ceil((i + 1) / med * 7));
+    if(n.due && n.due < likely) out.atRisk.push([n.id, String(n.text || "").slice(0, 120), String(n.assign || ""), n.due, likely]);
+  });
+  return out;
+}
+function kbForecastLine(f){
+  if(!f || f.perWeek == null) return "";
+  const w = f.weeksLeft;
+  return f.open + " open · " + f.perWeek + " a week → about " + (w < 1 ? "a week" : w === 1 ? "1 week" : w + " weeks") + " (around " + f.date + ")";
+}
+function kbAge(sec){
+  const t = Math.max(0, Math.round(+sec || 0));
+  if(t < 48 * 3600) return fmtDur(t);
+  const d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600);
+  return h ? d + "d " + h + "h" : d + "d";
+}
+const KB_SU_STUCK_S = 3 * 86400, KB_SU_MAX = 10, KB_SU_KEY = "ygmind.kbsu.";
+function kbStandup(r, cols, log, since, now, stuckS){
+  const stuckLim = stuckS == null ? KB_SU_STUCK_S : stuckS;
+  const colById = new Map((cols || []).map(c => [c.id, c]));
+  const started = kbStartedCols(cols);
+  const nom = id => (colById.get(id) || {}).name || "";
+  const txt = n => String(n.text || "").slice(0, 120);
+  const today = new Date(now * 1000).toISOString().slice(0, 10);
+  const dayNum = s => Math.floor(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 86400000);
+  const parCarte = new Map();
+  for(const e of (log || [])){ if(e[0] > now) continue; let l = parCarte.get(e[1]); if(!l) parCarte.set(e[1], l = []); l.push(e); }
+  const done = [], startedL = [], added = [], left = [], stuck = [], overdue = [], load = new Map(), inCol = new Map();
+  // ⏸ `waiting` : les cartes qui attendent un contact (`kbWaitOf`) — [id, texte, responsable, contacts, âge ou null]. Une carte
+  // en attente ne figure pas AUSSI dans « Stuck » : la balle est dans le camp de quelqu'un d'extérieur, pas de l'équipe.
+  const waiting = [];
+  const vus = new Set();
+  let moves = 0, open = 0;
+  (function w(n, inh){
+    vus.add(n.id);
+    const es = parCarte.get(n.id) || [];
+    const inWin = es.filter(e => e[0] > since);
+    const onBoard = !!(n.col && colById.has(n.col));
+    const who = String(n.assign || "");
+    if(inWin.length){
+      moves += inWin.length;
+      const last = inWin[inWin.length - 1];
+      if(inWin.some(e => e[4])) added.push([n.id, txt(n), who]);
+      if(!onBoard || last[2] === "" || last[2] === "-") left.push([n.id, txt(n)]);
+      else if(n.check === true && inWin.some(e => e[3])){
+        let at = null; for(const e of inWin) if(e[3]) at = e[0];
+        done.push([n.id, txt(n), who, at]);
+      } else if(n.check !== true){
+        const avant = es.filter(e => e[0] <= since), a0 = avant[avant.length - 1];
+        const wasWork = !!(a0 && !a0[3] && started.has(a0[2]));
+        const enters = inWin.find(e => !e[3] && started.has(e[2]));
+        if(enters && !wasWork) startedL.push([n.id, txt(n), who, nom(enters[2]), enters[0]]);
+      }
+    }
+    if(onBoard && n.check !== true){
+      open++;
+      inCol.set(n.col, (inCol.get(n.col) || 0) + 1);
+      let L = load.get(who); if(!L) load.set(who, L = { who, open: 0, work: 0, tsec: 0 });
+      L.open++;
+      const der = es.length ? es[es.length - 1][0] : null;   // le dernier mouvement CONNU, jamais supposé
+      const wt = kbWaitOf(n, inh, cols, der || 0);
+      if(wt) waiting.push([n.id, txt(n), who, wt.who.map(cardPromptNoMail).join(", "), wt.since != null ? now - wt.since : null]);
+      if(started.has(n.col)){
+        L.work++; L.tsec += okSecs(n.tsec);
+        if(!wt && der != null && now - der > stuckLim) stuck.push([n.id, txt(n), who, nom(n.col), now - der]);
+      }
+      if(n.due && n.due < today) overdue.push([n.id, txt(n), who, n.due, dayNum(today) - dayNum(n.due)]);
+    }
+    const own = kbContactNames(n);
+    n.children.forEach(c => w(c, own.length ? own : inh));
+  })(r, []);
+  // Les cartes SUPPRIMÉES du document pendant la fenêtre : le journal les a vues partir (« - »),
+  // l'arbre ne les a plus. Pas de texte à montrer — le journal n'en garde pas.
+  for(const [id, es] of parCarte){
+    if(vus.has(id)) continue;
+    const e = es[es.length - 1];
+    if(e[0] > since && e[2] === "-"){ moves += es.filter(x => x[0] > since).length; left.push([id, ""]); }
+  }
+  done.sort((a, b) => (b[3] || 0) - (a[3] || 0));
+  startedL.sort((a, b) => (b[4] || 0) - (a[4] || 0));
+  stuck.sort((a, b) => b[4] - a[4]);
+  waiting.sort((a, b) => (b[4] == null ? -1 : b[4]) - (a[4] == null ? -1 : a[4]));
+  overdue.sort((a, b) => b[4] - a[4]);
+  const wip = (cols || []).filter(c => !c.done && c.wip && (inCol.get(c.id) || 0) > c.wip).map(c => [c.name, inCol.get(c.id) || 0, c.wip]);
+  const loadL = [...load.values()].sort((a, b) => (b.work - a.work) || (b.open - a.open) || a.who.localeCompare(b.who)).map(L => [L.who, L.open, L.work, L.tsec]);
+  const forecast = kbForecast(r, cols, log, now, today);
+  return { since, now, moves, open, silent: moves === 0, done, started: startedL, added, left, stuck, waiting, overdue, wip, load: loadL, stuckDays: Math.round(stuckLim / 86400), forecast };
+}
+const KB_UNBLOCK_MAX = 20;
+function kbUnblockFacts(r, cols, log, now){
+  const su = kbStandup(r, cols || [], log || [], now - 86400, now);
+  const seen = new Set(), cards = [];
+  const add = (id, text, who, why, detail) => {
+    if(!id || seen.has(id) || cards.length >= KB_UNBLOCK_MAX) return;
+    seen.add(id); cards.push({ id, text, who, why, detail });
+  };
+  for(const b of kbBlocked(r, cols || [])) add(b[0], b[1], b[2], b[3] === "block" ? "marked Blocked" : "waits on an open card", b[3] === "block" ? "" : b[4]);
+  for(const e of su.overdue) add(e[0], e[1], e[2], "overdue", "due " + e[3] + ", " + e[4] + (e[4] === 1 ? " day" : " days") + " late");
+  for(const e of su.stuck) add(e[0], e[1], e[2], "no move", "in " + e[3] + " for " + kbAge(e[4]));
+  const wip = su.wip.map(w => ({ col: w[0], cards: w[1], limit: w[2] }));
+  if(!cards.length && !wip.length) return null;
+  return { cards, wip, load: su.load.filter(l => l[2]).map(l => ({ who: l[0], inWork: l[2] })) };
+}
+
+// Ce que lit `board_numbers` : le fichier tel quel, passé par les frontières de l'app (`okKanbanCols`, `okKbLog`, `okKbSeason`,
+// `projSprints`) et un arbre aux enfants toujours présents (les copies marchent `n.children`). Borné : 200 niveaux, 20 000 nœuds.
+function bnTree(n, budget){
+  if(!n || typeof n !== "object" || budget.left-- <= 0) return null;
+  const o = Object.assign({}, n);
+  o.children = [];
+  if(budget.depth < 200 && Array.isArray(n.children)){
+    budget.depth++;
+    for(const c of n.children){ const t = bnTree(c, budget); if(t) o.children.push(t); }
+    budget.depth--;
+  }
+  return o;
+}
+// Qui porte une carte : la partie avant @ d'une adresse (jamais une adresse entière), « Claude » pour un agent, sinon « unassigned ».
+function bnWho(s){
+  const parts = assignList(s || "").map(p => { const a = agentOf(p); return a ? (a === "claude" ? "Claude" : a) : cardPromptNoMail(p); });
+  return parts.length ? parts.join(", ") : "";
+}
+const BN_LIST = 12;
+// LE TEXTE. `now` en secondes. Tout chiffre vient d'une copie de l'app : le connecteur ne recompte rien à sa façon.
+function boardNumbersText(m, now){
+  const doc = m.doc || {}, K = doc.kanban || {};
+  const cols = okKanbanCols(K.cols) || [];
+  if(!cols.length) throw new Error("“" + m.name + "” has no kanban columns, so it has no board numbers. Open it as a kanban in TabTree first, or add columns with propose_changes { op: \"columns\", … }.");
+  const root = bnTree(doc.root, { left: 20000, depth: 0 });
+  if(!root) throw new Error("“" + m.name + "” has no content.");
+  const log = okKbLog(K.log), season = okKbSeason(K.season) || {}, sprints = projSprints(K);
+  const tagNames = kbTagNames(doc);
+  const L = [], cap = (arr, f) => arr.slice(0, BN_LIST).map(f).concat(arr.length > BN_LIST ? ["    … and " + (arr.length - BN_LIST) + " more"] : []);
+  const card = (t, who) => "“" + projLine(t, 120) + "”" + (who ? " (" + bnWho(who) + ")" : "");
+  L.push("📊 Board numbers — “" + projLine(m.name, 120) + "” (file: " + m.file + ") — " + kbDayLabel(now) + (HOSTED ? " · days are counted in UTC" : ""));
+  const F = kbFlow(root, cols, log, now, tagNames);
+  const today = F.cfd[F.cfd.length - 1].per;
+  L.push("Cards per column now: " + cols.map(c => c.name + " " + (today[c.id] || 0) + (c.wip ? "/" + c.wip : "")).join(" · "));
+  // ── Le sprint : sa face (Build quand le tableau a deux faces), son plan, son burnup.
+  const sides = kbSidesOf(root), scope = sides ? sides.build : root;
+  const P = kbSprintPlan(root, sprints, log, now);
+  const B = kbBurnup(scope, cols, log, season, P, now, "cards");
+  L.push("");
+  L.push("📈 " + kbSeasonPlanBits(P, now).head + (sides ? " — the Build side" : "") + (season.goal ? " · goal: " + projLine(season.goal, 200) : ""));
+  if(!B) L.push("  Nothing to measure yet: no card has moved since the sprint started.");
+  else {
+    L.push("  " + kbBurnLine(B));
+    const pts = B.pts.slice(1).slice(-14);
+    if(pts.length) L.push("  Day by day (done / scope): " + pts.map(p => (p.t === B.now ? "now" : kbDayLabel(p.t - 1).split(" ").slice(1).join(" ")) + " " + p.done + "/" + p.scope).join(" · "));
+    if(B.planEnd == null) L.push("  No planned length: add the attribute “Sprint length: 2 weeks” on the map's root to get a planned end.");
+  }
+  // ── Ce qui bloque : la règle du 🪁 Unblock de l'app (Blocked, en attente d'une carte ouverte, en retard, immobile).
+  const U = kbUnblockFacts(root, cols, log, now);
+  L.push("");
+  if(!U) L.push("🚧 Blocking: nothing — no card is marked Blocked, waits on an open card, is overdue or has sat still for 3 days, and no column is over its limit.");
+  else {
+    L.push("🚧 Blocking (" + U.cards.length + (U.cards.length >= KB_UNBLOCK_MAX ? "+" : "") + ")");
+    for(const l of cap(U.cards, c => "  • " + card(c.text, c.who) + " — " + c.why + (c.detail ? ": " + projLine(c.detail, 140) : "") + " [card " + c.id + "]")) L.push(l);
+    if(U.wip.length) L.push("  Columns over their limit: " + U.wip.map(w => w.col + " " + w.cards + "/" + w.limit).join(" · "));
+    if(U.load.length) L.push("  In work per person: " + U.load.map(l => (bnWho(l.who) || "unassigned") + " " + l.inWork).join(" · "));
+  }
+  // ── Le flux : le temps de cycle, ce qui vieillit, la plage de fin, la prévision par carte, les étiquettes.
+  L.push("");
+  L.push("📊 Flow — last 30 days");
+  L.push(F.p50 != null ? "  Cycle time (first work column → done), " + F.cycles + " card" + (F.cycles === 1 ? "" : "s") + ": half within " + kbAge(F.p50) + ", 85% within " + kbAge(F.p85)
+                       : "  Cycle time: no card went from a work column to done in the last 30 days.");
+  const late = F.p85 != null ? F.aging.filter(a => a[3] > F.p85) : [];
+  if(F.aging.length){
+    const colName = id => (cols.find(c => c.id === id) || {}).name || "";
+    L.push("  Work in progress, oldest first" + (late.length ? " — " + late.length + " past the 85% mark" : "") + ":");
+    for(const l of cap(F.aging, a => "  • " + card(a[1], a[4]) + " — " + colName(a[2]) + " for " + kbAge(a[3]) + (F.p85 != null && a[3] > F.p85 ? " ⚠️" : "") + " [card " + a[0] + "]")) L.push(l);
+  }
+  const rl = kbFlowRangeLine(F.range);
+  if(rl) L.push("  Forecast: " + rl);
+  const fc = kbForecast(root, cols, log, now, new Date(now * 1000).toISOString().slice(0, 10));
+  if(fc.perWeek != null) L.push("  At the median pace: " + kbForecastLine(fc));
+  if(fc.atRisk.length){
+    L.push("  At risk — the due date comes before the likely finish (" + fc.atRisk.length + "):");
+    for(const l of cap(fc.atRisk, e => "  • " + card(e[1], e[2]) + " — due " + e[3] + ", likely " + e[4] + " [card " + e[0] + "]")) L.push(l);
+  }
+  if(F.tags.length) L.push("  Labels: " + F.tags.slice(0, BN_LIST).map(t => projLine(t.name, 40) + " " + t.open + " open, " + t.done30 + " done" + (t.med != null ? ", median " + kbAge(t.med) : "")).join(" · "));
+  // ── Les agents : les cartes CONFIÉES à un agent (`agent:<nom>` dans `assign`). Le journal ne dit pas qui a déplacé une carte.
+  const A = F.agent;
+  L.push("");
+  if(!A.carrying.length && !A.done.length) L.push("🪁 Agents — no card on this board is assigned to an agent (assign “agent:claude” to give one to Claude).");
+  else {
+    L.push("🪁 Agents — last 7 days: " + A.done.length + " done, " + A.carrying.length + " carrying");
+    for(const l of cap(A.done, d => "  ✓ " + card(d[1]) + " [card " + d[0] + "]")) L.push(l);
+    for(const l of cap(A.carrying, c => "  • " + card(c[1]) + " — " + projLine(c[2], 60) + " [card " + c[0] + "]")) L.push(l);
+  }
+  L.push("");
+  L.push(U ? "To move things forward, propose changes on these cards with propose_changes (a comment that names the next step, a sub-task, a priority, a due date, an owner). Comments, sub-tasks, priorities, dates and owners apply by themselves; a rename, a note or a deletion waits for the user's approval in TabTree. Never move a card to a done column for the user."
+           : "Numbers only: nothing was changed. Use propose_changes to act on a card.");
+  return L.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Définition des outils
 // ---------------------------------------------------------------------------
@@ -4392,6 +4927,11 @@ const TOOLS = [
     }, required:["file","card"], additionalProperties:false }
   }
   ,{
+    name: "board_numbers",
+    description: "Reads the numbers of ONE TabTree kanban board, computed by the same code as the app's 📊 Dashboard and 🏁 Sprint panel: cards per column; the running sprint (day, goal) and its burnup — done / scope, scope change since day 1, the pace and whether it will finish on time, day by day; what is blocking (cards marked Blocked, waiting on an open card, overdue, or still for 3 days; columns over their limit; work per person); the flow over 30 days (cycle time, ageing work in progress, a forecast range, cards at risk of missing their due date, labels); and what agents carry. Use it when the user asks how a board, a sprint or a project is going, what is blocking, or when it will be done — then act on it with propose_changes. Read-only.",
+    inputSchema: { type:"object", properties:{ file:{ type:"string", description:"The kanban, as list_maps names it (a file name or a map name)." } }, required:["file"], additionalProperties:false }
+  }
+  ,{
     name: "deliver_card",
     description: "Sends your finished work on a card back to TabTree, ON that card, for the user's approval: the deliverable becomes a 📄 entry under the card (its note holds your result, in Markdown), with optional next-step sub-tasks, and the card moves to the board's review column when it has one (e.g. \"🛂 To validate\") — or to the column you name, never Done on such a board, never Won or Lost on a sales pipeline (a human moves it there). Nothing is written until the user approves it in TabTree — one banner, one click, Cmd+Z undoes it. Use it after card_prompt, once the deliverable is ready. Never put a password, key or token in it.",
     inputSchema: { type:"object", properties:{
@@ -4417,6 +4957,7 @@ const TOOL_ANNOTATIONS = {
   read_map:        { title: "Read a map",                          readOnlyHint: true,  openWorldHint: false },
   search_maps:     { title: "Search maps",                         readOnlyHint: true,  openWorldHint: false },
   card_prompt:     { title: "Get a card's prompt",                 readOnlyHint: true,  openWorldHint: false },
+  board_numbers:   { title: "Read a board's numbers",              readOnlyHint: true,  openWorldHint: false },
   create_mindmap:  { title: "Create a mind map",                   readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   plant_project:   { title: "Plant a project as a tree",           readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   create_board:    { title: "Create a whiteboard",                 readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -4946,6 +5487,13 @@ const HANDLERS = {
       + "NOTHING is written yet. TabTree shows a banner on that map (open it from 📚 Knowledge): the user ticks all and applies — one click; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting in TabTree — do not claim it is filled.";
   },
+  async board_numbers(args){
+    const a = args || {};
+    if(typeof a.file !== "string" || !a.file.trim()) throw new Error("`file` is required — the kanban, as list_maps names it.");
+    const m = await findMap(a.file);
+    if(m.kind === "board") throw new Error("“" + m.name + "” is a whiteboard: it has no columns, so no board numbers. Name a kanban (list_maps shows the kind).");
+    return boardNumbersText(m, Math.floor(Date.now() / 1000));
+  },
   async card_prompt(args){
     const a = args || {};
     if(a.kind != null && a.kind !== "" && !cardPromptKindById(a.kind)) throw new Error("`kind` must be one of " + CARD_PROMPT_KINDS.map(k=>k.id).join(", ") + " — or leave it out and TabTree reads the card.");
@@ -5048,7 +5596,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.21.0" }
+      serverInfo: { name: "tabtree", version: "1.22.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse

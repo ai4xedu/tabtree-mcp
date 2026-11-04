@@ -83,10 +83,12 @@ Or in your client's config:
 }
 ```
 
-Twelve tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
+Fourteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
 (a brief becomes a tree — roots, branches, birds), `create_kanban`, `create_board` (with
-your own images, and tables), `propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`
-and `deliver_card`. The connector **never overwrites or deletes a map**. Safe changes to an
+your own images, and tables), `plan_system` (a whole system from a brief, built after review),
+`propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`, `deliver_card`, and
+`board_numbers` (a kanban's burnup, what is blocking, cycle time and forecast — the numbers
+of TabTree's dashboard). The connector **never overwrites or deletes a map**. Safe changes to an
 existing map (add a card, move it, tick it, assign it, date it, comment on it) are applied by
 TabTree itself while it is open, and Cmd+Z undoes them; anything that rewrites or removes
 what someone wrote is shown to you first, as a banner on that map. Full detail in
