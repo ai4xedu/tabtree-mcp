@@ -1,6 +1,6 @@
 {
   "name": "tabtree-mcp",
-  "version": "1.22.0",
+  "version": "1.24.0",
   "mcpName": "app.tabtree/tabtree",
   "description": "Let Claude read your TabTree library and build mind maps, kanban boards and whiteboards in your TabTree account — team spaces included.",
   "repository": {

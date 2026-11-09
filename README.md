@@ -83,12 +83,13 @@ Or in your client's config:
 }
 ```
 
-Fourteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
+Fifteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
 (a brief becomes a tree — roots, branches, birds), `create_kanban`, `create_board` (with
 your own images, and tables), `plan_system` (a whole system from a brief, built after review),
 `propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`, `deliver_card`, and
 `board_numbers` (a kanban's burnup, what is blocking, cycle time and forecast — the numbers
-of TabTree's dashboard). The connector **never overwrites or deletes a map**. Safe changes to an
+of TabTree's dashboard), and `dispatch_cards` (the cards given to Claude that are ready to start, for
+`/tabtree:dispatch`). The connector **never overwrites or deletes a map**. Safe changes to an
 existing map (add a card, move it, tick it, assign it, date it, comment on it) are applied by
 TabTree itself while it is open, and Cmd+Z undoes them; anything that rewrites or removes
 what someone wrote is shown to you first, as a banner on that map. Full detail in
@@ -119,6 +120,8 @@ into a file of your repository.
 | `/tabtree:next` | Picks the card to work on next, reads its brief, moves it to the in-progress column. |
 | `/tabtree:status` | Says which board and card this session is tied to. |
 | `/tabtree:done` | Writes the deliverable onto the card, for your approval in TabTree. |
+| `/tabtree:coach` | Frames one card with you — space, board, card, then its brief — until an agent can take it. Nothing is written before you say yes. |
+| `/tabtree:dispatch` | In Claude's Code tab: opens one conversation per card given to Claude (its paper bird), four at most per run. Each conversation sets the card's `Test` link (a URL or a file path) as soon as there is something to try, and delivers the card for review. |
 | `atelier-vision-okr` | Facilitates a vision / mission / OKR session — in French, the language it was built to run workshops in — and writes the result as a canvas you can present. |
 
 Once a repository is linked, each session starts with a one-paragraph summary of the board
