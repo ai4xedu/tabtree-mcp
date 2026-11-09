@@ -1,10 +1,4 @@
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook session-start", "timeout": 5 } ] }
-    ],
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook stop", "timeout": 20, "async": true } ] }
-    ]
-  }
-}
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook session-start","timeout":5}]}],
+"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook post-bash","timeout":20,"async":true}]}],
+"Stop":[{"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook stop","timeout":20,"async":true}]}],
+"SessionEnd":[{"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/server/tabtree-mcp.mjs\" --hook session-end","timeout":20}]}]}}

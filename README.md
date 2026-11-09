@@ -83,13 +83,14 @@ Or in your client's config:
 }
 ```
 
-Fifteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
+Sixteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
 (a brief becomes a tree — roots, branches, birds), `create_kanban`, `create_board` (with
 your own images, and tables), `plan_system` (a whole system from a brief, built after review),
 `propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`, `deliver_card`, and
 `board_numbers` (a kanban's burnup, what is blocking, cycle time and forecast — the numbers
-of TabTree's dashboard), and `dispatch_cards` (the cards given to Claude that are ready to start, for
-`/tabtree:dispatch`). The connector **never overwrites or deletes a map**. Safe changes to an
+of TabTree's dashboard), `dispatch_cards` (the cards given to Claude that are ready to start, for
+`/tabtree:dispatch`), and `agent_runs` (the cards scheduled for an agent run today, for
+`/tabtree:run-due`). The connector **never overwrites or deletes a map**. Safe changes to an
 existing map (add a card, move it, tick it, assign it, date it, comment on it) are applied by
 TabTree itself while it is open, and Cmd+Z undoes them; anything that rewrites or removes
 what someone wrote is shown to you first, as a banner on that map. Full detail in
@@ -122,13 +123,18 @@ into a file of your repository.
 | `/tabtree:done` | Writes the deliverable onto the card, for your approval in TabTree. |
 | `/tabtree:coach` | Frames one card with you — space, board, card, then its brief — until an agent can take it. Nothing is written before you say yes. |
 | `/tabtree:dispatch` | In Claude's Code tab: opens one conversation per card given to Claude (its paper bird), four at most per run. Each conversation sets the card's `Test` link (a URL or a file path) as soon as there is something to try, and delivers the card for review. |
+| `/tabtree:run-due` | Runs the cards scheduled for an agent run today (an `Agent run: YYYY-MM-DD` attribute), three at most, and delivers each one for your review. The scheduled task « TabTree — agent runs » calls it. |
+| `/tabtree:watch` | Turns on the watcher for this repository: a card given to Claude that enters « Doing » opens a Claude Code session here by itself — only when the card is ready for an agent; otherwise one comment says what is missing. |
 | `atelier-vision-okr` | Facilitates a vision / mission / OKR session — in French, the language it was built to run workshops in — and writes the result as a canvas you can present. |
 
 Once a repository is linked, each session starts with a one-paragraph summary of the board
-and the current card, and the commits made during a session become one comment on the card:
-hash, subject and branch — never a diff, a file or a secret. A hook never blocks a session:
+and the current card, and the commits made during a session reach the card as you go — about
+every three minutes, as one comment: hash, subject and branch — never a diff, a file or a secret.
+TabTree sums them on the card's front (« ● 3 commits · 2 min »). A session started from a card's
+▶ Build with Claude Code button ties its worktree to the board by itself, and writes the
+board's `Repo:` from `git remote`. A hook never blocks a session:
 when TabTree does not answer, Claude goes on without it. The connector itself ships inside the
-plugin (the same `tabtree-mcp.mjs` as on npm), so the twelve tools above are in the session.
+plugin (the same `tabtree-mcp.mjs` as on npm), so the tools above are in the session.
 
 ## Screenshots
 

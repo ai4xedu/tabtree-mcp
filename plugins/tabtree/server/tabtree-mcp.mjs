@@ -22,14 +22,14 @@
 // Protocole : JSON-RPC 2.0, un message JSON par ligne sur stdin/stdout.
 // ============================================================================
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns";
 import { inflateSync, deflateSync } from "node:zlib";
-import { tmpdir, platform } from "node:os";
+import { tmpdir, platform, hostname, homedir } from "node:os";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // ⚠️ LE GABARIT NON RÉSOLU vaut « vide », pour le dossier comme pour la clé (2026-10-20). Claude
@@ -76,7 +76,7 @@ const KEY_UNSENT = !API_KEY && !KEY_FALLBACK && !!KEY_FIELD;
 // Le drapeau global vient de l'edge function `mcp-http` (son environnement est en lecture seule) ; la variable sert les tests.
 const HOSTED = globalThis.__TABTREE_HOSTED === true || String(process.env.TABTREE_HOSTED || "") === "1";
 const REQ = new AsyncLocalStorage();
-const GLOBAL_CTX = { key: "", spaces: null, me: null };
+const GLOBAL_CTX = { key: "", spaces: null, me: null, meEmail: null };
 function reqCtx(){ return REQ.getStore() || GLOBAL_CTX; }
 function curKey(){ const st = REQ.getStore(); return st ? st.key : API_KEY; }
 // 🏷 QUI SIGNE UNE PROPOSITION (2026-11-02, rapporté : un commentaire écrit depuis ChatGPT était signé « Claude »).
@@ -772,6 +772,9 @@ function nodeToMarkdown(n, depth, ctx){
        && assignList(node.assign).some(p => agentOf(p) === "claude")){
       const g = agentReadyGaps(node, { from: cardPromptKind(node).from });
       marks.push(g.length ? "⟪🤖 not ready: " + g.map(x => AGENT_READY_LABEL[x] || x).join(", ") + "⟫" : "⟪🤖 ready⟫");
+      // 🌅 Lot 2 : la date de l'exécuteur, et ce qui a déjà tourné — `agent_runs` dit le reste (le propriétaire, une livraison en attente).
+      const run = agentRunDay(node, AGENT_RUN_ATTR), ran = agentRunDay(node, AGENT_RAN_ATTR);
+      if(run) marks.push("⟪🌅 agent run " + run + (ran && ran >= run ? ", ran " + ran : "") + "⟫");
     }
     if(Array.isArray(node.tags) && node.tags.length) marks.push("⟪labels: " + node.tags.map(t => (cx.tagNames && cx.tagNames[t]) ? t + " “" + cx.tagNames[t] + "”" : t).join(", ") + "⟫");
     if(node.note && node.note.trim()) marks.push("⟪note⟫");
@@ -1409,9 +1412,10 @@ function teamLocalId(owner, key){
 // pour « Personal ». ⚠️ PAR REQUÊTE quand le connecteur est hébergé (`reqCtx()`) : un cache global y mélangerait les comptes.
 async function cloudLibrary(){
   const pages = [];
-  let total = Infinity, off = 0, j = null;
+  let total = Infinity, off = 0, j = null, meEmail = null;
   while(off < total && off < 5000){
     j = await cloudCall("docs", { limit: 100, offset: off });
+    if(typeof j.me_email === "string" && j.me_email) meEmail = j.me_email;
     const got = j.maps || [];
     pages.push(...got);
     total = typeof j.total === "number" ? j.total : got.length;   // edge function d'avant la 1.5.0 : une seule page
@@ -1420,6 +1424,7 @@ async function cloudLibrary(){
   }
   const me = (j && j.me) || null;
   reqCtx().me = me;
+  reqCtx().meEmail = meEmail;
   reqCtx().spaces = (j && j.spaces) || [];
   const spaceName = (owner, key)=>{ const sp = reqCtx().spaces.find(x=>x.owner === owner && x.space_key === key); return sp ? sp.name : null; };
   const folders = new Map((j && j.folders || []).filter(f=>f && f.folder_key).map(f=>[(f.owner || "") + "|" + f.folder_key, f]));
@@ -2348,6 +2353,11 @@ function buildProposalOps(mapDoc0, changes){
     } else if(op === "note"){
       if(typeof c.note !== "string") throw new Error(`${where}: \`note\` is required for a "note" (an empty string clears it).`);
       out.note = c.note.slice(0, 8000);
+      // 📝 D7 (Coach, lot 2) : REMPLIR une note vide est sûr — l'app l'applique sans clic, et revérifie qu'elle est encore vide
+      // (sinon le lot entier va à la revue). Réécrire une note écrite reste derrière un clic. La copie de travail reçoit la note :
+      // une seconde note sur le même nœud dans ce lot n'est plus « fraîche ».
+      if(out.note.trim() && !String(r.node.note || "").trim()) out.fresh = true;
+      r.node.note = out.note;
     } else if(op === "check"){
       const v = c.value === "true" ? true : c.value === "false" ? false : c.value;
       if(typeof v !== "boolean") throw new Error(`${where}: \`value\` must be true or false for a "check".`);
@@ -2569,7 +2579,7 @@ function chunkOps(list){
 // op sûre qui suit un renommage vise souvent le texte renommé, et l'appliquer avant lui la ferait
 // échouer chez l'utilisateur.
 // `season` n'est automatique que `fresh` (rien de tapé qu'elle remplacerait) — la règle de `propAutoOk` dans l'app.
-function autoOk(o){ return o.op === "cols" ? o.seed === true : o.op === "season" ? o.fresh === true : o.op === "bset" || PROP_AUTO_OPS.includes(o.op); }
+function autoOk(o){ return o.op === "cols" ? o.seed === true : (o.op === "season" || o.op === "note") ? o.fresh === true : o.op === "bset" || PROP_AUTO_OPS.includes(o.op); }
 function splitAuto(ops){
   let k = 0;
   while(k < ops.length && autoOk(ops[k])) k++;
@@ -3696,7 +3706,7 @@ const CARD_PROMPT_KINDS = [
 ];
 const CARD_PROMPT_TXT = {
   en:{ role:"Role", context:"Context", task:"Task", guard:"Guardrails", format:"Format",
-       board:"Board", col:"Column", branch:"Branch", owner:"Owner", due:"Due", start:"Start", prio:"Priority", est:"Estimate",
+       board:"Board", col:"Column", branch:"Branch", owner:"Owner", repo:"Repository", due:"Due", start:"Start", prio:"Priority", est:"Estimate",
        labels:"Labels", attrs:"Attributes", link:"Link", linked:"Linked document",
        spec:"Spec (from the card):", crit:(d, t)=>"Acceptance criteria (" + d + "/" + t + " done):", more:n=>"… and " + n + " more",
        lever:(l, h)=>"Ai4X lever: " + l + " — " + h, means:"Means to use (pick the one that fits, say why):", also:"Also:",
@@ -3714,7 +3724,7 @@ const CARD_PROMPT_TXT = {
                "Never ask for or produce a password, key or token.",
                "Answer in the language of the task."] },
   fr:{ role:"Rôle", context:"Contexte", task:"Tâche", guard:"Garde-fous", format:"Format",
-       board:"Tableau", col:"Colonne", branch:"Branche", owner:"Responsable", due:"Échéance", start:"Début", prio:"Priorité", est:"Estimation",
+       board:"Tableau", col:"Colonne", branch:"Branche", owner:"Responsable", repo:"Dépôt", due:"Échéance", start:"Début", prio:"Priorité", est:"Estimation",
        labels:"Étiquettes", attrs:"Attributs", link:"Lien", linked:"Document lié",
        spec:"Spec (de la carte) :", crit:(d, t)=>"Critères d'acceptation (" + d + "/" + t + " faits) :", more:n=>"… et " + n + " de plus",
        lever:(l, h)=>"Levier Ai4X : " + l + " — " + h, means:"Moyens à utiliser (choisis celui qui convient, dis pourquoi) :", also:"Aussi :",
@@ -3774,6 +3784,35 @@ function cardPromptCap(lines, budget, more){
   }
   return out;
 }
+// 📁 Le dépôt du tableau et le filtre des passages (2026-11-09) : COPIÉS de l'app, comparés par le test (CP_HEADS).
+const KB_TEST_ATTR = "Test";
+const KB_REPO_ATTR = "Repo";
+function cardRepoClean(v){
+  let s = String(v == null ? "" : v).trim();
+  if(!s || s.length > 200 || /[\s\u0000-\u001f\u007f\\]/.test(s)) return "";
+  const m = /^git@([A-Za-z0-9.-]+\.[A-Za-z]{2,}):(.+)$/.exec(s);
+  if(m) s = m[1] + "/" + m[2];
+  else if(/^https?:[/][/]/i.test(s)){ s = s.replace(/^https?:[/][/]/i, ""); if(/^[^/]*@/.test(s)) return ""; }
+  s = s.replace(/\/+$/, "").replace(/\.git$/i, "");
+  // Le filtre des secrets par SEGMENT : sur le tout, « github.com/northwind/hidden-tokens » (34 caractères, lettres et chiffres)
+  // passait pour un jeton.
+  if(s.length > 160 || /(^|\/)\.\.?(\/|$)/.test(s) || s.split("/").some(kbSecretLike)) return "";
+  return /^(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/)?[A-Za-z0-9._-]{1,100}(?:\/[A-Za-z0-9._-]{1,100}){0,4}$/.test(s) ? s : "";
+}
+function cardRepoOf(chain){
+  for(const c of chain || []){
+    for(const k of (c && c.node && c.node.children) || []){
+      const a = attrSplit(k);
+      if(a && a.name.toLowerCase() === KB_REPO_ATTR.toLowerCase()){ const r = cardRepoClean(a.val); if(r) return r; }
+    }
+  }
+  return "";
+}
+function cardPassagesOwn(passages, own, frame){
+  const ft = new Set(knowTokens(frame)), ot = knowTokens(own).filter(t => !ft.has(t));
+  if(!ot.length) return [];
+  return (passages || []).filter(p => { const e = knowNorm(String((p && p.path) || "") + "\n" + String((p && p.excerpt) || "")); return ot.some(t => e.indexOf(t) >= 0); });
+}
 function cardPromptPlan(n, ctx){
   const c = ctx || {}, lang = c.lang === "fr" ? "fr" : "en", W = CARD_PROMPT_TXT[lang];
   const det = cardPromptKind(n);
@@ -3790,6 +3829,8 @@ function cardPromptPlan(n, ctx){
   if(ask) cx.push("- " + W.changes(ask));
   const where = [c.board ? W.board + ": " + one(c.board, 120) : "", c.col ? W.col + ": " + one(c.col, 60) : ""].filter(Boolean).join(" · ");
   if(where) cx.push("- " + where);
+  const repo = cardRepoClean(c.repo);
+  if(repo) cx.push("- " + W.repo + ": " + repo);
   if(c.parent) cx.push("- " + W.branch + ": " + one(c.parent, 160));
   const owners = (c.owners || []).map(cardPromptWho).filter(Boolean);
   const meta = [owners.length ? W.owner + ": " + owners.join(", ") : "",
@@ -3801,7 +3842,8 @@ function cardPromptPlan(n, ctx){
   if(c.wait && Array.isArray(c.wait.who) && c.wait.who.length) cx.push("- " + W.waiting(c.wait.who.map(v => one(cardPromptNoMail(v), 80)).join(", "), c.wait.days != null ? c.wait.days : null));
   const tags = (c.tags || []).map(t => one(t, 40)).filter(Boolean);
   if(tags.length) cx.push("- " + W.labels + ": " + tags.join(", "));
-  const skip = new Set([KB_LEVER_ATTR, KB_FILED_ATTR, CARD_PROMPT_KIND_ATTR, CARD_PROMPT_GATE_ATTR, KB_ABOUT_ATTR, KB_KNOWSRC_ATTR].map(s => s.toLowerCase()));
+  // `Session` et `Test` sont la plomberie de ▶ (une session, un lien à essayer) ; `Repo` a sa propre ligne.
+  const skip = new Set([KB_LEVER_ATTR, KB_FILED_ATTR, CARD_PROMPT_KIND_ATTR, CARD_PROMPT_GATE_ATTR, KB_ABOUT_ATTR, KB_KNOWSRC_ATTR, KB_SESSION_ATTR, KB_TEST_ATTR, KB_REPO_ATTR].map(s => s.toLowerCase()));
   const at = attrsOf(n).filter(a => !skip.has(a.name.toLowerCase())).map(a => one(a.name + ": " + cardPromptNoMail(a.val), 200)).filter(Boolean);
   if(at.length) cx.push(...cardPromptCap(at.map(a => "- " + a), 1200, W.more));
   // 💼 Une SOUS-TÂCHE d'une carte du tableau (le travail d'agent sous une affaire du CRM) reçoit les attributs de sa carte : la
@@ -3918,6 +3960,58 @@ function agentReadyGaps(n, o){
   return gaps;
 }
 function agentReadyText(gaps){ return gaps.length ? "missing " + gaps.map(g => AGENT_READY_LABEL[g] || g).join(", ") : "yes"; }
+// 🌅 L'EXÉCUTEUR (Coach Claude, lot 2, 2026-11-09, docs/superpowers/specs/2026-11-08-claude-coach-design.md § 8). PURE, et
+// COPIÉ dans src/js/3148-agent-runs.js (le test compare chaque déclaration) : 🌙 « Confier à Claude cette nuit » grise dans l'app
+// les cartes que l'exécuteur ne prendrait pas, avec la MÊME règle.
+//  • `Agent run: AAAA-MM-JJ` programme une carte confiée à Claude (un attribut, posé sans clic : le Coach, 🌙 dans l'app).
+//  • `Agent ran: AAAA-MM-JJ` dit que l'exécuteur l'a livrée — posé par deliver_card SANS clic, à côté du livrable qui, lui,
+//    attend la revue. `Agent run` reste : relancer une carte, c'est lui donner une date plus tardive.
+//  • `agentRunBlock` = « l'exécuteur la prendrait-il, une fois programmée ? » (vide = oui) ; `agentRunWhy` y ajoute la date,
+//    ce qui a déjà tourné et une livraison en attente. Une carte de Personal (`personal`) est à moi : personne d'autre ne la lit.
+//  • `today` est le jour LOCAL de l'utilisateur (le connecteur hébergé tourne en UTC : l'exécuteur le passe).
+function workIsMine(assign, me){
+  const mes = (Array.isArray(me) ? me : [me]).map(x=>String(x || "").trim().toLowerCase()).filter(Boolean);
+  return assignList(assign).some(s=>{ const a = s.toLowerCase(); return mes.some(m=>a === m || a.split("@")[0] === m.split("@")[0]); });
+}
+const AGENT_RUN_ATTR = "Agent run", AGENT_RAN_ATTR = "Agent ran", AGENT_RUN_MAX = 3;
+const AGENT_RUN_WHY = { card:"neither a kanban card nor a task", closed:"done or closed", agent:"not given to agent:claude", review:"waiting in the review column",
+  owner:"another person answers for it", code:"a code deliverable (the runner does not take those yet)", notready:"not ready for an agent",
+  date:"no Agent run date", later:"scheduled for a later day", ran:"already run for this date", pending:"its last delivery waits for review" };
+function agentRunDay(n, name){
+  const a = attrsOf(n).find(x => x.name.toLowerCase() === String(name).toLowerCase());
+  return a ? (okDate(String(a.val || "").trim()) || "") : "";
+}
+function agentRunToday(t){
+  const d = t == null ? new Date() : new Date(t);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+// 🌳 Une TÂCHE de l'arbre (une case ouverte, sans colonne) se prend comme une carte (2026-11-09) : cochée = fermée, et pas de
+// colonne de revue — c'est la livraison en attente qui la retient. Une branche sans case ni colonne n'est ni l'une ni l'autre.
+function agentRunBlock(n, o){
+  const opt = o || {}, cols = Array.isArray(opt.cols) ? opt.cols : [];
+  if(!n || (!n.col && n.check !== false && n.check !== true)) return "card";
+  const col = n.col ? cols.find(c => c && c.id === n.col) : null;
+  if(n.check === true || (n.col && (!col || col.done || agentColLost(col)))) return "closed";
+  if(!assignList(n.assign).some(p => agentOf(p) === "claude")) return "agent";
+  const rv = agentReviewCol(cols);
+  if(rv && rv.id === n.col) return "review";
+  if(!opt.personal && !workIsMine(n.assign, opt.me || [])) return "owner";
+  const k = cardPromptKind(n);
+  if(k.id === "code") return "code";
+  if(agentReadyGaps(n, { from: k.from, knowledge: opt.knowledge }).length) return "notready";
+  return "";
+}
+function agentRunWhy(n, o){
+  const b = agentRunBlock(n, o);
+  if(b) return b;
+  const opt = o || {}, run = agentRunDay(n, AGENT_RUN_ATTR);
+  if(!run) return "date";
+  if(run > String(opt.today || "")) return "later";
+  const ran = agentRunDay(n, AGENT_RAN_ATTR);
+  if(ran && ran >= run) return "ran";
+  if(opt.pending) return "pending";
+  return "";
+}
 const CARD_PROMPT_PASSAGES = 3000;
 const KNOW_MAX_FILES = 80, KNOW_FILE_MAX = 60000, KNOW_BUDGET = 24000, KNOW_PER_FILE = 5000, KNOW_DEPTH = 2, KNOW_CACHE_MS = 60000;
 const KNOW_STOP = new Set(("avec,pour,dans,cette,cela,celui,celle,elles,nous,vous,leur,leurs,sont,etre,être,faire,fait,plus,moins,tout,tous,toute,toutes,comme,mais,donc,alors,"
@@ -4066,11 +4160,14 @@ function cpContext(m, lib, card, opts){
   return { lang: o.lang === "fr" ? "fr" : "en", kind: o.kind || "", board: n === root ? "" : String(root.text || ""), col: cpColName(doc, n),
            parent: (card.parent && card.parent !== root) ? card.parent.text : "",
            parentCard: (card.parent && card.parent !== root) ? card.parent : null,
-           owners: String(n.assign || "").split(/[,;]/).map(s=>s.trim()).filter(Boolean),
+           owners: String(n.assign || "").split(/[,;]/).map(s=>s.trim()).filter(s=>s && !agentOf(s)),
+           repo: cardRepoOf(card.chain),
            tags: (Array.isArray(n.tags) ? n.tags : []).map(k=>tagNames[k]).filter(Boolean), link, rules,
            knowMap: km ? km.name + (src ? " · " + src.label : "") : "", knowMissing: kr.missing, knowGone: gone ? src.label : "",
            knowledge: kr.list.map(x=>({ name:x.e.name, section:x.e.section, how:x.how, from:x.from, note:x.e.note, facts:x.e.facts, channels:(x.e.channels || []).map(c=>c.name) })),
-           passages: knowPick(files, q.join("\n"), CARD_PROMPT_PASSAGES).map(p=>({ path: p.path, excerpt: p.excerpt })), wait: cpWait(doc, card) };
+           passages: cardPassagesOwn(knowPick(files, q.join("\n"), CARD_PROMPT_PASSAGES).map(p=>({ path: p.path, excerpt: p.excerpt })),
+             [n.text || "", n.note || ""].concat((n.children || []).map(k=>k.text || "")).join("\n"),
+             [(card.parent && card.parent.text) || "", root.text || ""].join("\n")), wait: cpWait(doc, card) };
 }
 // ⏸ L'attente de la carte, comme `kbWaitHere` de l'app : le contact du plus proche ancêtre, le dernier mouvement connu du journal.
 function cpWait(doc, card){
@@ -4952,7 +5049,7 @@ const TOOLS = [
   },
   {
     name: "propose_changes",
-    description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, a ⭐ star for the user, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Changes that rewrite or remove what someone wrote — rename, note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
+    description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, a ⭐ star for the user, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Filling an EMPTY note is safe too (TabTree checks it is still empty when it applies it). Changes that rewrite or remove what someone wrote — rename, rewriting a written note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
       + "STEERING A 🗂 PROJECT (format projet) — no extra tool, four safe changes: (1) read_map and use its “🗂 Project” block — the live sprint's counts and the Backlog ranked by ICE = Impact × Confidence × (6 − Effort), from the cards' (or their epic's) `Impact:` / `Confidence:` / `Effort:` attributes; (2) plan the next sprint by pulling the top of that ranking from Backlog into “To do” with `move` — keep the work-in-progress to about 6 committed cards in total (committed = everything off Backlog), fewer if some are still Doing; (3) set the running sprint's goal with { op: \"season\", goal: \"…\", name: \"Sprint 2\" } — it lands in the 🎯 chip and the 🏁 panel, by itself when nobody typed one, for review otherwise (set \"Sprint length\" / \"Sprints start\" once on the ROOT with `attr`); (4) settle a bet with { op: \"attr\", target: \"<epic text>\", name: \"Verdict\", value: \"validated\" } — untested, testing, validated or invalidated. Give each change a `why`. Add a new epic with `add` under “🧱 Epics” (its four attribute lines and its cards in one markdown), a decision with `add` under “📝 Decisions”, and turn an existing map into a project with { op: \"format\", format: \"projet\" }. The user closes a sprint in TabTree's 🏁 panel; the connector never closes one."
       + " PLACING A KANBAN CARD ON THE FREE BOARD: place { target, x, y } puts a card where the user's 🎨 Board view draws it (x, y = its top-left corner); a shape there named after a column, a day or a person is a zone, and TabTree writes that field itself — the move / due / assign the zone implies are added to your proposal. read_map lists the zones. A person zone is recognised only from an assign already on the map, or Claude. A batch that contradicts its own zone is refused.",
     inputSchema: { type:"object", properties:{
@@ -5082,6 +5179,13 @@ const TOOLS = [
       note:     { type:"string", description:"Optional: one line shown on TabTree's banner." }
     }, required:["file","card","result"], additionalProperties:false }
   }
+  ,{
+    name: "agent_runs",
+    description: "Lists the cards scheduled for an agent run that are due: kanban cards — or tree tasks (an open checkbox, no column) — given to agent:claude, with an \"Agent run: YYYY-MM-DD\" attribute on or before `today`, that the user answers for, that are ready for an agent (deliverable, done criteria, context, gate), not done (a ticked task is done), not waiting in a review column, not already run for that date and with no delivery waiting for review. Oldest date first, " + AGENT_RUN_MAX + " at most per run; the rest is counted. Also lists the scheduled cards that will NOT run, with the reason. Use it when the user (or a scheduled task) asks to run the due agent cards: then, for each due card, call card_prompt, do the work, and call deliver_card — never more than " + AGENT_RUN_MAX + ". Read-only.",
+    inputSchema: { type:"object", properties:{
+      today: { type:"string", description:"The user's local date, YYYY-MM-DD (the server's clock may be on another day). Left out, the server's date." }
+    }, additionalProperties:false }
+  }
 ];
 
 // 🏷 LES ANNOTATIONS DES OUTILS (1.18.0, 2026-11-02) — l'annuaire des connecteurs d'Anthropic les EXIGE (un `title` et
@@ -5106,6 +5210,7 @@ const TOOL_ANNOTATIONS = {
   fill_knowledge:  { title: "Fill the company knowledge base",     readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   dispatch_cards:  { title: "List the cards ready for Claude Code", readOnlyHint: true,  openWorldHint: false },
   deliver_card:    { title: "Deliver work on a card",              readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  agent_runs:      { title: "List the cards due for an agent run", readOnlyHint: true,  openWorldHint: false },
 };
 for(const t of TOOLS){
   const an = TOOL_ANNOTATIONS[t.name];
@@ -5151,7 +5256,7 @@ const HANDLERS = {
       + (waiting.length ? "\n\n" + waiting.join("\n") + "\n(These are not in the map above yet. Do not ask for them again.)" : "")
       + (ro ? "\n\n(You can read this team map but not change it — the user's role in its space is viewer.)"
             : "\n\n(To change this map, use propose_changes with `file: \"" + m.file + "\"`. Name a node by the exact text above, or \"Ancestor > Node\" when it appears twice. "
-              + (CLOUD ? "Safe changes (add, move, tick, owner, dates, labels, lever…) are applied by TabTree itself; rename, note and delete wait for the user's approval.)"
+              + (CLOUD ? "Safe changes (add, move, tick, owner, dates, labels, lever…) are applied by TabTree itself; filling an empty note too; rename, rewriting a written note and delete wait for the user's approval.)"
                        : "Nothing is applied until the user approves it in TabTree.)"));
   },
   async search_maps(args){
@@ -5669,6 +5774,54 @@ const HANDLERS = {
       + (ro ? "This card is in a space where the user is a viewer: give the result in the conversation — it cannot be delivered onto the card."
             : "When the deliverable is ready, call deliver_card with file “" + m.file + "”, card “" + (card.node.id || card.path) + "” and the deliverable as `result`: it lands on the card for the user's approval. Never say it is on the card before that.");
   },
+  async agent_runs(args){
+    const a = args || {};
+    if(a.today != null && a.today !== "" && !okDate(String(a.today))) throw new Error("`today` must be a date, YYYY-MM-DD.");
+    const today = a.today ? String(a.today) : agentRunToday();
+    const lib = await loadLibrary(), me = reqCtx().meEmail ? [reqCtx().meEmail] : [];
+    const due = [], skipped = [];
+    for(const m of lib){
+      if(!m || m.kind === "board" || !m.doc || !m.doc.root) continue;
+      if(m.team && m.role === "viewer") continue;
+      const cols = (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [];
+      // 🌳 Une carte sans kanban peut porter des TÂCHES programmées (une case ouverte, sans colonne) : la règle décide.
+      const opt = { cols, me, personal: !m.team && !m.spaceKey, today, knowledge: 0 };
+      const sched = [];
+      (function w(n, g){ if(!n || g > 200) return; if((n.col || n.check === false || n.check === true) && agentRunDay(n, AGENT_RUN_ATTR)) sched.push(n); (n.children || []).forEach(c=>w(c, g + 1)); })(m.doc.root, 0);
+      if(!sched.length) continue;
+      let pending = null;
+      for(const n of sched){
+        let why = agentRunWhy(n, opt);
+        // La connaissance ne se lit qu'au besoin : seule la carte qui manque de contexte la paie.
+        if(why === "notready"){
+          try{ const card = cpFindCard(m.doc, n.id); why = agentRunWhy(n, Object.assign({}, opt, { knowledge: cpContext(m, lib, card, {}).knowledge.length })); } catch(e){}
+        }
+        if(!why){
+          if(pending === null) pending = CLOUD ? await ttPendingOf(m) : [];
+          if(pending.some(p=>(p.ops || []).some(o=>ttOpIs(o, n)))) why = "pending";
+        }
+        const row = { m, n, run: agentRunDay(n, AGENT_RUN_ATTR) };
+        // Une carte faite ou fermée n'est pas « sautée » : elle a fini sa vie, la lister serait du bruit.
+        if(why === "closed") continue;
+        if(why) skipped.push(Object.assign(row, { why })); else due.push(row);
+      }
+    }
+    const byDate = (x, y)=>x.run < y.run ? -1 : x.run > y.run ? 1 : String(x.m.name).localeCompare(String(y.m.name));
+    due.sort(byDate); skipped.sort(byDate);
+    const take = due.slice(0, AGENT_RUN_MAX), later = due.length - take.length;
+    const line = r=>"“" + projLine(r.n.text, 80) + "” — map “" + r.m.name + "” (file: " + r.m.file + ", card: " + (r.n.id || r.n.text) + ") · Agent run " + r.run;
+    const out = ["🌅 Agent runs for " + today + ": " + (take.length ? take.length + " card(s) to run now" : "nothing to run") + (later ? ", " + later + " more due (next run)" : "")];
+    take.forEach((r, i)=>out.push("  " + (i + 1) + ". " + line(r)));
+    if(skipped.length){
+      out.push("Scheduled but not run (" + skipped.length + "):");
+      skipped.slice(0, 20).forEach(r=>out.push("  • " + line(r) + " — " + (AGENT_RUN_WHY[r.why] || r.why)));
+      if(skipped.length > 20) out.push("  • … and " + (skipped.length - 20) + " more");
+    }
+    out.push(take.length
+      ? "For each card above, in order: call card_prompt (file, card), do the work it describes, then call deliver_card with the result. Skip a card whose prompt asks a question only the user can answer, and say so. Never take more than " + AGENT_RUN_MAX + ". Nothing lands on a card before the user approves it in TabTree."
+      : "Tell the user there is nothing to run today" + (skipped.length ? ", and why the scheduled cards were skipped" : "") + ".");
+    return out.join("\n");
+  },
   async deliver_card(args){
     const a = args || {};
     if(typeof a.result !== "string" || !a.result.trim()) throw new Error("`result` is required — your deliverable, in Markdown.");
@@ -5717,10 +5870,27 @@ const HANDLERS = {
     if(col) ops.push(Object.assign({ op:"move" }, at, { was: String(card.node.text || ""), col: col.id, why: byDefault ? "Waiting for you to validate it" : "Ready for “" + col.name + "”" }));
     const res = await writeProposal(m, hvLine(a.note, 300) || "🪄 Claude's work on “" + hvLine(card.node.text, 120) + "”", ops,
                                     { review: true, extra: { origin: "card", title: hvLine(card.node.text, 120) } });
+    // 🌅 Une carte programmée (`Agent run`) et confiée à Claude reçoit `Agent ran` SANS clic, À CÔTÉ du livrable qui attend la
+    // revue : l'exécuteur du lendemain ne la reprend pas (et tant que l'app n'a pas appliqué la marque, la livraison en attente
+    // l'arrête aussi). Jamais au-dessus de la date programmée : max(aujourd'hui, la date). Compte seulement — dans le dossier 🛟
+    // une proposition va toujours à la revue, et une marque à cliquer ne servirait à rien.
+    const runOn = agentRunDay(card.node, AGENT_RUN_ATTR);
+    let ranMark = "";
+    if(CLOUD && runOn && assignList(card.node.assign).some(p=>agentOf(p) === "claude")){
+      const today = agentRunToday(), ran = today > runOn ? today : runOn;
+      if(agentRunDay(card.node, AGENT_RAN_ATTR) !== ran){
+        try{
+          await writeProposal(m, "🌅 Agent run delivered", [Object.assign({ op:"attr" }, at, { name: AGENT_RAN_ATTR, value: ran, why: "Run once for " + runOn })],
+                              { extra: { origin: "agent-run" } });
+          ranMark = "   • the card is marked “" + AGENT_RAN_ATTR + ": " + ran + "” (no click needed): the runner will not take it again for this date\n";
+        } catch(e){ ranMark = "   • ⚠ the “" + AGENT_RAN_ATTR + "” mark could not be written (" + e.message + "): the delivery waiting for review still keeps the runner off this card\n"; }
+      }
+    }
     return "📮 Your work on “" + card.node.text + "” is waiting in TabTree (map “" + m.name + "”" + (CLOUD ? "" : ", " + res.ids.review) + "):\n"
       + "   • 📄 " + title + (parts.length > 1 ? " — in " + parts.length + " parts" : "") + "\n"
       + (subs.length ? "   • " + subs.length + " sub-task(s) to tick\n" : "")
       + (col ? "   • the card moves to “" + col.name + "”" + (byDefault ? " (the board's review column: a human validates it and moves it to Done)" : "") + "\n" : "")
+      + ranMark
       + (secrets ? "🔒 " + secrets + " line(s) looked like a password, key or token and were left out.\n" : "")
       + "NOTHING is on the card yet. TabTree shows a banner on that map" + (CLOUD ? " within a minute (app open, signed in)" : " (backup folder connected, app open)") + ": the user reviews it and applies it in one click; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting for their approval in TabTree — do not claim it is on the card.";
@@ -5749,7 +5919,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.24.0" }
+      serverInfo: { name: "tabtree", version: "1.28.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -5811,6 +5981,17 @@ function ttLinkRead(root){
     return TT_FILE_FORM.test(file) ? { file } : null;
   }catch(e){ return null; }
 }
+// ▶ LE LIEN D'UN WORKTREE (2026-11-09, la carte vivante). Une session ouverte par ▶ lance `tabtree card <id> --board <fichier>` :
+// sans lui, un dépôt jamais relié par /tabtree:link ne recevait AUCUN commit (les hooks lisent `.tabtree.json`, que personne n'avait
+// écrit). Le lien vit dans le dossier git (`--git-path`), par worktree : aucun fichier non suivi n'apparaît dans le dépôt de
+// l'utilisateur, rien n'est commité par mégarde. Il passe AVANT `.tabtree.json` : c'est le geste le plus précis (cette carte, ici).
+// `tabtree link` le retire, pour qu'un lien d'une ancienne session ne prenne jamais le pas sur un choix fait ensuite.
+function ttLinkLocalRead(cwd){
+  const p = ttGitPath(cwd, "tabtree-board");
+  if(!p) return null;
+  try{ const v = readFileSync(p, "utf8").trim(); return TT_FILE_FORM.test(v) ? { file: v, local: true } : null; }catch(e){ return null; }
+}
+function ttLinkFor(cwd, root){ return ttLinkLocalRead(cwd) || (root ? ttLinkRead(root) : null); }
 // Par worktree, et jamais suivie par git : deux worktrees peuvent travailler sur deux cartes.
 function ttCardPath(cwd){
   const p = ttGit(cwd, ["rev-parse", "--git-path", "tabtree-card"]);
@@ -5820,6 +6001,14 @@ function ttCardRead(cwd){
   const p = ttCardPath(cwd);
   if(!p) return "";
   try{ const v = readFileSync(p, "utf8").trim(); return TT_CARD_FORM.test(v) ? v : ""; }catch(e){ return ""; }
+}
+// La carte en cours d'un dépôt : la commande `card` et le veilleur l'écrivent, et notent HEAD (les commits d'avant ne sont pas les siens).
+function ttCardSet(cwd, id){
+  const p = ttCardPath(cwd);
+  if(!p) return false;
+  writeFileSync(p, id + "\n");
+  const st = ttStateRead(cwd); st.sent = ttHead(cwd); ttStateWrite(cwd, st);
+  return true;
 }
 function ttPlugin(args){
   const cwd = process.cwd(), root = ttRepoRoot(cwd);
@@ -5831,21 +6020,47 @@ function ttPlugin(args){
     if(!TT_FILE_FORM.test(file)) stop("TabTree: that is not a map id. Use the `file:` value that list_maps shows.");
     const name = projLine(args[2], 120);
     writeFileSync(join(root, TT_LINK_FILE), JSON.stringify({ file, name }, null, 2) + "\n");
+    try{ const lp = ttGitPath(cwd, "tabtree-board"); if(lp) rmSync(lp, { force: true }); }catch(e){}
     process.stdout.write("Linked to “" + name + "”. Commit " + TT_LINK_FILE + " so teammates share the link.\n");
   } else if(cmd === "card"){
     const p = ttCardPath(cwd);
     if(args[1] === "--clear"){ rmSync(p, { force: true }); process.stdout.write("No current card.\n"); return; }
     const id = String(args[1] || "");
     if(!TT_CARD_FORM.test(id)) stop("TabTree: that is not a card id.");
-    writeFileSync(p, id + "\n");
-    const st = ttStateRead(cwd); st.sent = ttHead(cwd); ttStateWrite(cwd, st);
-    process.stdout.write("Current card: " + id + "\n");
+    const bi = args.indexOf("--board"), board = bi > 0 ? String(args[bi + 1] || "") : "";
+    if(bi > 0 && !TT_FILE_FORM.test(board)) stop("TabTree: that is not a board file. Use the `file:` value that list_maps shows.");
+    ttCardSet(cwd, id);
+    if(board){ const lp = ttGitPath(cwd, "tabtree-board"); if(lp) writeFileSync(lp, board + "\n"); }
+    process.stdout.write("Current card: " + id + (board ? "\nBoard: " + board + " — your commits will show up on the card." : "") + "\n");
   } else if(cmd === "where"){
-    const link = ttLinkRead(root);
+    const link = ttLinkFor(cwd, root);
     if(!link){ process.stdout.write("This repository is not linked to a TabTree board.\n"); return; }
     const card = ttCardRead(cwd);
     process.stdout.write("Board: " + link.file + "\nCurrent card: " + (card || "none") + "\n");
-  } else stop("TabTree: use link, card or where.");
+  } else if(cmd === "watch"){
+    // 👀 Sans clé ni réseau : le registre seul. Le veilleur lui-même tourne dans le serveur MCP du plugin (ou `--watch`).
+    const sub = String(args[1] || "status"), w = ttWatchRead();
+    if(sub === "on"){
+      const link = ttLinkRead(root);
+      if(!link) stop("TabTree: link this repository to a board first (/tabtree:link).");
+      w.on = true;
+      w.repos = w.repos.filter(r=>r.root !== root).concat([{ root, file: link.file }]);
+      ttWatchWrite(w);
+      process.stdout.write("Watching board " + link.file + " for this repository: a card given to Claude that enters “Doing” opens a Claude Code session here, within about 20 s — once it is ready for an agent (deliverable, done criteria, context, gate, a human owner). A card that is not says why, on the card.\n" + (ttWatchOpenMode() === "code" ? "It opens in the Code tab of Claude Desktop, prompt filled in: press Enter to start (TABTREE_WATCH_OPEN=terminal starts it in Terminal instead).\n" : "") + "The watcher runs inside the plugin's connector while any Claude Code session is open (or standalone: node tabtree-mcp.mjs --watch).\n");
+    } else if(sub === "off"){
+      w.repos = w.repos.filter(r=>r.root !== root);
+      if(!w.repos.length) w.on = false;
+      ttWatchWrite(w);
+      process.stdout.write("Not watching this repository" + (w.on ? "." : " — the watcher is off.") + "\n");
+    } else if(sub === "reset"){
+      w.started = {}; w.waiting = {}; ttWatchWrite(w);
+      process.stdout.write("Forgot the cards already opened: a card still in “Doing” without its Session attribute can be opened again.\n");
+    } else {
+      process.stdout.write("Watcher: " + (w.on ? "on" : "off") + "\n"
+        + (w.repos.length ? w.repos.map(r=>"  " + r.file + " → " + r.root + (r.root === root ? "  (this repository)" : "")).join("\n") + "\n" : "  no repository registered — run: tabtree watch on\n")
+        + "Opened so far: " + Object.keys(w.started).length + " card(s)\n");
+    }
+  } else stop("TabTree: use link, card, where or watch.");
 }
 
 // Retrouve le propriétaire d'un tableau relié. `T<10 hexa>_<clé>` ne suffit pas à `get`, qui veut l'uuid entier, et
@@ -5927,14 +6142,16 @@ async function ttOpenBoard(file){
 
 // 🔌 Lot 3 : les commits sur la carte. On lit git, jamais les commandes : un filtre sur « git commit » raterait
 // « cd x && git commit » et ce qui est fait à la main. L'état vit par worktree, comme la carte en cours.
-const TT_GAP_MS = 10 * 60 * 1000, TT_BATCH = 10, TT_QUEUE_MAX = 200;
+// ▶ La carte vivante (2026-11-09) : trois minutes, plus dix. Un commit arrive sur la carte pendant que Claude travaille (le hook
+// `PostToolUse` sur Bash), pas seulement à la fin du tour ; le lot de dix et toutes les autres règles restent.
+const TT_GAP_MS = 3 * 60 * 1000, TT_BATCH = 10, TT_QUEUE_MAX = 200;
 function ttGitPath(cwd, name){ const p = ttGit(cwd, ["rev-parse", "--git-path", name]); return p ? resolve(cwd, p) : ""; }
 function ttHead(cwd){ return ttGit(cwd, ["rev-parse", "--verify", "-q", "HEAD"]) || "-"; }   // « - » : dépôt sans commit
 function ttStateRead(cwd){
   try{
     const j = JSON.parse(readFileSync(ttGitPath(cwd, "tabtree-state"), "utf8"));
-    return { sent: typeof j.sent === "string" ? j.sent : null, at: +j.at || 0, queue: Array.isArray(j.queue) ? j.queue : [] };
-  }catch(e){ return { sent: null, at: 0, queue: [] }; }
+    return { sent: typeof j.sent === "string" ? j.sent : null, at: +j.at || 0, queue: Array.isArray(j.queue) ? j.queue : [], repoSent: typeof j.repoSent === "string" ? j.repoSent : "" };
+  }catch(e){ return { sent: null, at: 0, queue: [], repoSent: "" }; }
 }
 function ttStateWrite(cwd, st){ try{ writeFileSync(ttGitPath(cwd, "tabtree-state"), JSON.stringify(st)); }catch(e){} }
 // Un rebase réécrit l'histoire : la base n'est plus un ancêtre, et on ne renvoie pas ce qui a déjà été dit.
@@ -5998,6 +6215,7 @@ async function ttFlush(cwd, link){
       await writeProposal(m, "Commits from Claude Code", ops, { extra: { via: "plugin" } });
       items.forEach(q=>done.add(q.sha));
     }
+    await ttRepoBack(cwd, m).catch(()=>{});
     // Relu : un autre hook a pu ajouter des commits pendant l'envoi.
     const st = ttStateRead(cwd);
     st.queue = st.queue.filter(q=>!done.has(q.sha));
@@ -6006,12 +6224,30 @@ async function ttFlush(cwd, link){
   }catch(e){}   // hors ligne, refus : la file reste, rien n'est perdu
   finally{ unlock(); }
 }
+// 📁 LE DÉPÔT RENDU AU TABLEAU (2026-11-09). Un tableau sans « Repo: » à la racine reçoit le dépôt où Claude a VRAIMENT travaillé :
+// `git remote get-url origin`, passé par `cardRepoClean` (la copie de l'app). Jamais demandé à la personne, jamais tapé de travers.
+// Une op `attr`, donc appliquée sans clic ; jamais quand le tableau en a déjà un ; une fois par worktree (`repoSent`). PURE : `ttRepoBackOp`.
+function ttRepoBackOp(doc, remote){
+  const root = doc && doc.root;
+  if(!root || cardRepoOf([{ node: root }])) return null;
+  const repo = cardRepoClean(remote);
+  const name = String(root.text == null ? "" : root.text).trim();
+  return repo && name ? { op: "attr", target: name, name: KB_REPO_ATTR, value: repo } : null;
+}
+async function ttRepoBack(cwd, m){
+  const st = ttStateRead(cwd);
+  if(st.repoSent) return;
+  const c = ttRepoBackOp(m.doc, ttGit(cwd, ["remote", "get-url", "origin"]));
+  if(!c) return;
+  await writeProposal(m, "Repository linked by Claude Code", buildProposalOps(m.doc, [c]), { extra: { via: "plugin" } });
+  const s2 = ttStateRead(cwd); s2.repoSent = c.value; ttStateWrite(cwd, s2);
+}
 function ttHookInput(){
   let input = {};
   try{ input = JSON.parse(readFileSync(0, "utf8") || "{}"); }catch(e){}
   const cwd = String((input && input.cwd) || process.cwd());
   const root = ttRepoRoot(cwd);
-  return { cwd, link: root ? ttLinkRead(root) : null };
+  return { cwd, root, link: root ? ttLinkFor(cwd, root) : null, reason: String((input && input.reason) || "") };
 }
 const TT_NET_MS = 3000;
 async function ttHookSessionStart(){
@@ -6053,20 +6289,358 @@ async function ttHookStop(){
   if(API_KEY_OK) await Promise.race([ ttFlush(cwd, link), new Promise(ok=>setTimeout(ok, 15000)) ]);
   return "";
 }
+// SessionEnd : si cette session est celle que le VEILLEUR a ouverte, la carte l'apprend (voir « le retour » dans le bloc 👀).
+// `clear` n'est pas une fin : la même fenêtre continue, et SessionStart repart sur la même carte.
+async function ttHookSessionEnd(){
+  const { cwd, root, link, reason } = ttHookInput();
+  if(!link || !root || reason === "clear") return "";
+  ttEnqueue(cwd, ttCardRead(cwd));
+  if(!API_KEY_OK) return "";
+  await Promise.race([ ttWatchEnd(cwd, root, link), new Promise(ok=>setTimeout(ok, 15000)) ]);
+  return "";
+}
 // Toujours 0, quoi qu'il arrive : un hook ne bloque jamais une session de code.
 function ttHook(event){
-  const run = event === "session-start" ? ttHookSessionStart : event === "stop" ? ttHookStop : async ()=>"";
+  // `post-bash` (PostToolUse sur Bash, en arrière-plan) : le même geste que `Stop`, dès qu'une commande vient de tourner. Sans commit
+  // neuf, deux `git` locaux et AUCUN appel réseau ; jamais de sortie.
+  const run = event === "session-start" ? ttHookSessionStart : (event === "stop" || event === "post-bash") ? ttHookStop : event === "session-end" ? ttHookSessionEnd : async ()=>"";
   run().catch(()=>"").then(text=>{
     if(text) process.stdout.write(text + "\n", ()=>process.exit(0));
     else process.exit(0);
   });
 }
 
+// ---------------------------------------------------------------------------
+// 👀 LE VEILLEUR : « Doing » → Claude Code démarre (1.15.0, 2026-11-02)
+//
+// Quand une carte confiée à Claude (`assign` porte `agent:claude`) entre dans une colonne de la famille « doing »,
+// une session Claude Code s'ouvre dans le dépôt relié à son tableau, avec le prompt du 🪄 (`card_prompt`) comme premier
+// message. AUCUNE action serveur de plus : `list` (l'index, léger) à chaque tour, `get` seulement quand `updated_at` du
+// tableau a bougé, `pending` pour voir une réclamation encore dans la boîte, `propose` pour réclamer. Trois règles :
+//   1. RÉCLAMER AVANT D'OUVRIR : un attribut `Session: <hôte · date>` et un commentaire partent en lot `auto` (l'app de
+//      l'utilisateur les applique). Une carte qui porte l'attribut, ou dont la boîte porte déjà la réclamation, n'est
+//      jamais ouverte deux fois — deux Mac avec la même clé lisent la même boîte.
+//   2. Le registre vit chez l'utilisateur (`~/.tabtree/watch.json`, `TABTREE_HOME` pour les tests) : les dépôts reliés
+//      (`tabtree watch on` dans chacun), les cartes déjà ouvertes (borné), l'interrupteur. UN veilleur à la fois par
+//      machine (`watch.lock`, battement à chaque tour, périmé à 90 s) : chaque session Claude Code lance son propre
+//      serveur MCP, et chacun porte ce code.
+//   3. JAMAIS stdout dans le serveur MCP (c'est le transport) : le veilleur parle sur stderr, ou se tait.
+// ---------------------------------------------------------------------------
+const TT_WATCH_MS = 20000, TT_WATCH_STALE_MS = 90000, TT_WATCH_STARTED_MAX = 500, TT_WATCH_TRIES = 3;
+const TT_WATCH_AGENT = "agent:claude", TT_WATCH_ATTR = "Session";
+function ttHome(){ return String(process.env.TABTREE_HOME || join(homedir(), ".tabtree")); }
+function ttWatchFile(){ return join(ttHome(), "watch.json"); }
+// Un fichier absent, illisible ou d'une autre forme vaut « éteint, rien de relié ».
+function ttWatchRead(){
+  try{
+    const j = JSON.parse(readFileSync(ttWatchFile(), "utf8"));
+    return { on: j.on === true,
+      repos: (Array.isArray(j.repos) ? j.repos : []).filter(r=>r && typeof r.root === "string" && r.root && TT_FILE_FORM.test(String(r.file || ""))).map(r=>({ root: r.root, file: r.file })),
+      started: (j.started && typeof j.started === "object" && !Array.isArray(j.started)) ? j.started : {},
+      waiting: (j.waiting && typeof j.waiting === "object" && !Array.isArray(j.waiting)) ? j.waiting : {} };
+  }catch(e){ return { on: false, repos: [], started: {}, waiting: {} }; }
+}
+function ttWatchWrite(w){
+  try{ mkdirSync(ttHome(), { recursive: true }); writeFileSync(ttWatchFile(), JSON.stringify(w, null, 2) + "\n"); }catch(e){}
+}
+// Les 500 ouvertures les plus récentes : le registre ne grandit pas avec les sprints.
+function ttWatchPrune(w){
+  const keys = Object.keys(w.started).sort((a, b)=>String(w.started[b].at || "").localeCompare(String(w.started[a].at || "")));
+  for(const k of keys.slice(TT_WATCH_STARTED_MAX)) delete w.started[k];
+  const wk = Object.keys(w.waiting || {}).sort((a, b)=>String(w.waiting[b].at || "").localeCompare(String(w.waiting[a].at || "")));
+  for(const k of wk.slice(TT_WATCH_STARTED_MAX)) delete w.waiting[k];
+}
+// `assign` porte plusieurs personnes (« agent:claude, sara@x.dev ») : la lecture de l'app (`assignList` + `agentOf`), en clair.
+function ttAgentOn(assign){
+  return assignList(assign).some(p=>agentOf(p) === "claude");
+}
+// PURE : la décision. Une carte à ouvrir est dans une colonne « doing » (jamais la colonne `done`), confiée à Claude,
+// non cochée, sans attribut `Session`, sans réclamation en attente dans la boîte (`pending`), pas encore dans le registre
+// (sauf un échec qui n'a pas épuisé ses essais), ET PRÊTE (2026-11-09, décision du propriétaire : « uniquement quand le prompt
+// est bien défini ») : `agentReadyGaps`, la règle du Coach et de `card_prompt`, en un exemplaire. Une carte qui ne l'est pas
+// va dans `wait` avec ses manques ; elle démarre d'elle-même au tour où elle le devient. `know` (id → nombre d'entrées de
+// connaissance que la carte reçoit) n'est fourni que pour les cartes à qui il manque le contexte : sans lui, une carte courte que
+// la connaissance couvre attendrait à tort. Tout le reste est dit dans `skip`, avec sa raison.
+// Une RÉCLAMATION est l'attribut `Session` ou le commentaire « 🤖 Claude Code started » — jamais un autre commentaire : celui qui
+// dit qu'une carte attend est dans la même boîte, et il bloquerait le départ jusqu'à ce que l'app l'applique.
+const TT_WATCH_CLAIM_RE = /^🤖 Claude Code started\b/;
+function ttClaimOp(o){
+  return !!o && ((o.op === "attr" && String(o.name || "").toLowerCase() === TT_WATCH_ATTR.toLowerCase())
+    || (o.op === "comment" && TT_WATCH_CLAIM_RE.test(String(o.text || ""))));
+}
+function watchPlan(doc, file, started, pending, know){
+  const cols = (doc && doc.kanban && Array.isArray(doc.kanban.cols)) ? doc.kanban.cols : [];
+  const doing = new Set(cols.filter(c=>c && !c.done && kbColKin(c.name) === 1).map(c=>c.id));
+  const claims = [];
+  for(const p of pending || []) for(const o of (p && p.ops) || []) if(ttClaimOp(o)) claims.push(o);
+  const kn = know || {};
+  const start = [], skip = [], wait = [];
+  (function walk(n){
+    for(const c of (n && n.children) || []){
+      if(c && c.col && doing.has(c.col) && ttAgentOn(c.assign)){
+        const prev = (started || {})[file + "/" + c.id];
+        if(c.check === true) skip.push({ id: c.id, why: "done" });
+        else if(attrsOf(c).some(a=>a.name.toLowerCase() === TT_WATCH_ATTR.toLowerCase())) skip.push({ id: c.id, why: "claimed" });
+        else if(claims.some(o=>ttOpIs(o, c))) skip.push({ id: c.id, why: "claiming" });
+        else if(prev && !prev.ended && (!prev.error || (prev.tries || 0) >= TT_WATCH_TRIES)) skip.push({ id: c.id, why: prev.error ? "failed" : "started" });
+        else {
+          const gaps = agentReadyGaps(c, { from: cardPromptKind(c).from, knowledge: kn[c.id] });
+          if(gaps.length) wait.push({ id: c.id, text: projLine(c.text, 120), gaps });
+          else start.push({ id: c.id, text: projLine(c.text, 120) });
+        }
+      }
+      walk(c);
+    }
+  })(doc && doc.root);
+  return { start, skip, wait };
+}
+// Le verrou : un dossier, dont la date est le battement. Un détenteur qui a disparu (veille, crash) est relevé après 90 s.
+let ttWatchHeld = false;
+function ttWatchLockPath(){ return join(ttHome(), "watch.lock"); }
+function ttWatchLock(){
+  const p = ttWatchLockPath();
+  if(ttWatchHeld){ try{ const t = new Date(); utimesSync(p, t, t); return true; }catch(e){ ttWatchHeld = false; } }
+  try{ if(Date.now() - statSync(p).mtimeMs > TT_WATCH_STALE_MS) rmSync(p, { recursive: true, force: true }); }catch(e){}
+  try{ mkdirSync(ttHome(), { recursive: true }); mkdirSync(p); ttWatchHeld = true; return true; }catch(e){ return false; }
+}
+function ttWatchUnlock(){ if(ttWatchHeld){ try{ rmSync(ttWatchLockPath(), { recursive: true, force: true }); }catch(e){} ttWatchHeld = false; } }
+// Le lanceur : UN script shell par carte, le prompt dans un fichier à côté (jamais un argument composé à la main), ouvert
+// dans un nouveau Terminal sur macOS. `TABTREE_WATCH_LAUNCH` (les tests, un autre terminal) reçoit le chemin du script.
+function shq(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+function ttLaunchScript(repo, id, promptPath){
+  return "#!/bin/bash\n# TabTree: card " + projLine(id, 80) + "\ncd " + shq(repo) + " || exit 1\nexec claude \"$(cat " + shq(promptPath) + ")\"\n";
+}
+// 🖥 L'ONGLET CODE (2026-11-09) : sur macOS, le veilleur ouvre une session de l'onglet Code de Claude Desktop, comme ▶ Build
+// with Claude Code de l'app (`cardCodeUrl`, même forme de lien, même borne de 14 000 caractères) : le prompt est posé, la
+// personne appuie sur Entrée. `TABTREE_WATCH_OPEN=terminal` garde le Terminal, qui démarre tout de suite ; hors macOS, le Terminal.
+const TT_CODE_PROMPT_MAX = 14000;
+function ttWatchOpenMode(){
+  const v = String(process.env.TABTREE_WATCH_OPEN || "").trim().toLowerCase();
+  if(v === "terminal" || v === "code") return v;
+  return platform() === "darwin" ? "code" : "terminal";
+}
+function ttCodeUrl(text, folder){
+  const t = String(text || "");
+  if(!t || t.length > TT_CODE_PROMPT_MAX) return "";
+  return "claude://code/new?prompt=" + encodeURIComponent(t) + (folder ? "&folder=" + encodeURIComponent(folder) : "");
+}
+// PURE. Ce que la session doit savoir en plus du 🪄 : la carte est DÉJÀ réclamée et dans la colonne en cours (ne rien y refaire),
+// où travailler, comment rendre. Jamais « done » : un humain le décide. Trop long pour le lien : la forme courte, qui fait relire
+// la carte par `card_prompt`.
+function ttWatchBlock(file, card){
+  return "## TabTree watcher\n"
+    + "This session was opened by the TabTree watcher because the card entered an in-progress column. The card already carries its “"
+    + TT_WATCH_ATTR + "” line and sits in the right column: do not set either again.\n"
+    + "- If the `tabtree` command exists, run `tabtree card " + JSON.stringify(String(card)) + " --board " + JSON.stringify(String(file)) + "` first, so your commits land on this card.\n"
+    + "- Work on a branch of your own, never on the default branch.\n"
+    + "- When the work can be checked, set the card's “Test” attribute to the command that proves it (propose_changes, op attr).\n"
+    + "- When the deliverable is ready, call deliver_card (file “" + file + "”, card “" + card + "”): it lands on the card for review.\n"
+    + "- Never move the card to a done column: a person decides that.";
+}
+function ttWatchPrompt(cardPrompt, file, card){
+  const block = ttWatchBlock(file, card);
+  const full = String(cardPrompt || "").replace(/\s+$/, "") + "\n\n" + block;
+  if(full.length <= TT_CODE_PROMPT_MAX) return { text: full, short: false };
+  return { text: "Build this TabTree card. Its full prompt is too long for the link: read it first with card_prompt (file “" + file + "”, card “" + card + "”).\n\n" + block, short: true };
+}
+function ttLaunch(script, url){
+  const custom = String(process.env.TABTREE_WATCH_LAUNCH || "").trim();
+  if(custom){ execFileSync(custom, [url || script], { stdio: "ignore", timeout: 10000 }); return url ? "Code tab (custom launcher)" : "custom launcher"; }
+  if(url){
+    try{ execFileSync("open", [url], { stdio: "ignore", timeout: 10000 }); return "Code tab"; }
+    catch(e){ /* Claude Desktop absent : le Terminal, qui démarre tout seul */ }
+  }
+  if(platform() === "darwin"){
+    const cmd = ("bash " + shq(script)).replace(/[\\"]/g, m=>"\\" + m);
+    execFileSync("osascript", ["-e", 'tell application "Terminal"', "-e", "activate", "-e", 'do script "' + cmd + '"', "-e", "end tell"], { stdio: "ignore", timeout: 10000 });
+    return "Terminal";
+  }
+  for(const [cmd, args] of [["gnome-terminal", ["--", "bash", script]], ["x-terminal-emulator", ["-e", "bash " + shq(script)]]]){
+    try{ execFileSync(cmd, args, { stdio: "ignore", timeout: 10000 }); return cmd; }catch(e){}
+  }
+  throw new Error("no terminal found — run it yourself: bash " + script);
+}
+// Une carte : réclamer (le lot `auto`, par la boîte de l'appelant), le prompt du 🪄, le script, la carte en cours du dépôt, le Terminal.
+// Un refus de la réclamation (lecteur, plan fini, réseau) n'ouvre RIEN : on ne travaille pas sur une carte qu'on n'a pas pu marquer.
+async function ttWatchStart(m, repo, card){
+  const { path } = cpFindCard(m.doc, card.id);
+  const stamp = projLine(hostname().split(".")[0], 40) + " · " + new Date().toISOString().slice(0, 16).replace("T", " ");
+  const ops = buildProposalOps(m.doc, [
+    { op: "attr", target: path, name: TT_WATCH_ATTR, value: stamp },
+    { op: "comment", target: path, text: "🤖 Claude Code started on this card (" + stamp + " UTC): the TabTree watcher opened a session in “" + projLine(basename(repo), 60) + "”." } ]);
+  await writeProposal(m, "Claude Code started", ops, { extra: { via: "plugin" } });
+  const prompt = ttWatchPrompt(await HANDLERS.card_prompt({ file: m.file, card: card.id }), m.file, card.id);
+  const dir = join(ttHome(), "starts"); mkdirSync(dir, { recursive: true });
+  const base = join(dir, (m.file + "-" + card.id).replace(/[^A-Za-z0-9_.-]/g, "_"));
+  writeFileSync(base + ".md", prompt.text + "\n");
+  writeFileSync(base + ".sh", ttLaunchScript(repo, card.id, base + ".md"), { mode: 0o700 });
+  ttCardSet(repo, card.id);
+  return ttLaunch(base + ".sh", ttWatchOpenMode() === "code" ? ttCodeUrl(prompt.text, repo) : "");
+}
+// LE RETOUR : la session que le veilleur a ouverte se ferme (hook SessionEnd, jamais Stop : Stop tombe à chaque tour). Les commits
+// en attente partent d'abord (la file de Stop), puis UN lot auto : l'attribut `Session` devient « ended <hôte · date> » et un
+// commentaire dit la branche, la pull request (`gh pr view`, 5 s, sinon « none yet ») et si un livrable est parti (`deliver_card` :
+// une entrée « 📄 … » sur la carte, ou encore dans la boîte). Rien n'est déplacé : la colonne est le geste d'un humain.
+// Une carte dont l'attribut dit « ended » n'est jamais rouverte par le veilleur (c'est un attribut `Session`) ; SUPPRIMER cette
+// ligne sur la carte est le geste de relance — le registre, lui, s'efface (`ended`) pour la laisser passer.
+function ttPrUrl(cwd){
+  try{
+    const u = execFileSync("gh", ["pr", "view", "--json", "url", "--jq", ".url"], { cwd, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
+      env: Object.assign({}, process.env, { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" }) }).trim();
+    return /^https:\/\/[^\s"'<>]{1,300}$/.test(u) ? u : "";
+  }catch(e){ return ""; }
+}
+// PURE : le livrable est-il parti ? Une entrée « 📄 » sous la carte (appliquée), ou un ajout de `deliver_card` encore dans la boîte.
+function ttDelivered(node, pending){
+  if(((node && node.children) || []).some(c=>c && /^📄 /.test(String(c.text || "")))) return true;
+  for(const p of pending || []) for(const o of (p && p.ops) || []) if(o && o.op === "add" && /Claude's work/.test(String(o.why || "")) && ttOpIs(o, node)) return true;
+  return false;
+}
+function ttEndText(stamp, branch, pr, delivered){
+  return "🤖 Claude Code session ended (" + stamp + " UTC)" + (branch ? " on branch “" + projLine(branch, 80) + "”" : "") + ".\n"
+    + (pr ? "Pull request: " + pr : "No pull request yet.")
+    + (delivered ? "" : "\nNo deliverable was sent from this session (/tabtree:done). The card stays here; delete its “Session” line to let Claude start it again.");
+}
+// L'onglet Code ouvre souvent un WORKTREE : son dossier n'est pas celui que le registre a noté, mais son dépôt l'est. On compare
+// donc les dossiers git communs (`--git-common-dir`), et le chemin seul quand git ne répond pas.
+function ttGitCommon(dir){
+  try{ return execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: dir, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+  catch(e){ return ""; }
+}
+function ttSameRepo(a, b){
+  if(!a || !b) return false;
+  if(a === b) return true;
+  const ca = ttGitCommon(a), cb = ttGitCommon(b);
+  return !!ca && ca === cb;
+}
+async function ttWatchEnd(cwd, root, link){
+  const card = ttCardRead(cwd);
+  if(!card) return "";
+  const key = link.file + "/" + card;
+  const st = ttWatchRead().started[key];
+  if(!st || st.error || st.ended || !ttSameRepo(st.repo, root)) return "";   // pas une session du veilleur, ou déjà close
+  await ttFlush(cwd, link).catch(()=>{});
+  const m = await ttOpenBoard(link.file);
+  if(!m) return "";
+  let hit; try{ hit = cpFindCard(m.doc, card); }catch(e){ return ""; }   // carte supprimée : rien à dire
+  const stamp = projLine(hostname().split(".")[0], 40) + " · " + new Date().toISOString().slice(0, 16).replace("T", " ");
+  const text = ttEndText(stamp, ttGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]), ttPrUrl(cwd), ttDelivered(hit.node, await ttPendingOf(m)));
+  const ops = buildProposalOps(m.doc, [ { op: "attr", target: hit.path, name: TT_WATCH_ATTR, value: "ended " + stamp }, { op: "comment", target: hit.path, text } ]);
+  await writeProposal(m, "Claude Code session ended", ops, { extra: { via: "plugin" } });
+  const w = ttWatchRead();   // relu : le veilleur a pu écrire entre-temps
+  if(w.started[key]){ w.started[key].ended = new Date().toISOString(); ttWatchWrite(w); }
+  return text;
+}
+// PURE. Ce que la carte dit quand elle attend : ses manques, en mots, la porte du Coach, et qu'elle partira seule. UNE fois par
+// entrée dans la colonne (`waiting` du registre) : un commentaire à chaque tour serait du bruit, et l'app relirait le tableau sans fin.
+function ttWaitText(gaps){
+  return "🤖 Not started by the TabTree watcher: this card is " + agentReadyText(gaps) + ". "
+    + "Complete it — or run /tabtree:coach in Claude Code to frame it with Claude. It starts by itself as soon as it is ready, without moving it again.";
+}
+// Le nombre d'entrées de connaissance qu'une carte reçoit, comme `card_prompt` le compte. Seulement pour une carte à qui il manque le
+// contexte (une bibliothèque relue par tour au plus). Une erreur vaut 0 : la carte attend, elle ne part jamais par erreur.
+async function ttWatchKnow(file, ids){
+  const out = {};
+  try{
+    const full = await findMap(file), lib = await loadLibrary();
+    for(const id of ids){ try{ out[id] = cpContext(full, lib, cpFindCard(full.doc, id), {}).knowledge.length; }catch(e){ out[id] = 0; } }
+  }catch(e){}
+  return out;
+}
+const ttWatchAt = {};   // tableau → `updated_at` vu au dernier tour (mémoire : un redémarrage relit tout une fois)
+async function ttWatchTick(log){
+  const w = ttWatchRead();
+  if(!w.on || !w.repos.length) return { on: false };
+  if(!ttWatchLock()) return { on: true, lock: false };
+  const list = await cloudCall("list", {});
+  const out = { on: true, lock: true, started: [], skipped: [], waiting: [] };
+  let dirty = false;
+  for(const r of w.repos){
+    const hit = ttResolve(list.maps, r.file);
+    if(!hit) continue;
+    const row = (list.maps || []).find(x=>x && x.map_key === hit.key && (x.owner || null) === hit.owner) || {};
+    const at = String(row.updated_at || "");
+    if(at && ttWatchAt[r.file] === at) continue;   // rien n'a bougé sur ce tableau : pas de document relu
+    const m = await ttOpenBoard(r.file);
+    if(!m) continue;
+    ttWatchAt[r.file] = at;
+    let first = watchPlan(m.doc, r.file, w.started, []);
+    const short = first.wait.filter(c=>c.gaps.includes("context")).map(c=>c.id);
+    const know = short.length ? await ttWatchKnow(r.file, short) : {};
+    if(short.length) first = watchPlan(m.doc, r.file, w.started, [], know);
+    const plan = (first.start.length || first.wait.length) ? watchPlan(m.doc, r.file, w.started, await ttPendingOf(m), know) : first;   // la boîte, seulement s'il y a un candidat
+    for(const s of plan.skip) out.skipped.push(s);
+    // Une carte qui n'attend plus (partie, sortie de la colonne, réclamée, cochée) libère sa place : revenue, elle le redira.
+    const waitNow = new Set(plan.wait.map(c=>r.file + "/" + c.id));
+    for(const k of Object.keys(w.waiting)) if(k.startsWith(r.file + "/") && !waitNow.has(k)){ delete w.waiting[k]; dirty = true; }
+    for(const c of plan.wait){
+      const key = r.file + "/" + c.id;
+      out.waiting.push({ id: c.id, gaps: c.gaps });
+      if(w.waiting[key]) continue;
+      try{
+        const { path } = cpFindCard(m.doc, c.id);
+        await writeProposal(m, "Claude Code waiting", buildProposalOps(m.doc, [{ op: "comment", target: path, text: ttWaitText(c.gaps) }]), { extra: { via: "plugin" } });
+        w.waiting[key] = { at: new Date().toISOString(), gaps: c.gaps.join(",") };
+        log("⏸ “" + c.text + "”: " + agentReadyText(c.gaps));
+      }catch(e){
+        w.waiting[key] = { at: new Date().toISOString(), gaps: c.gaps.join(","), error: projLine(e && e.message || e, 200) };
+        log("✗ “" + c.text + "”: " + w.waiting[key].error);
+      }
+      dirty = true;
+    }
+    for(const c of plan.start){
+      const key = r.file + "/" + c.id, prev = w.started[key] || {};
+      try{
+        const how = await ttWatchStart(m, r.root, c);
+        w.started[key] = { at: new Date().toISOString(), repo: r.root, how };
+        out.started.push(c.id);
+        log("▶ “" + c.text + "” → " + how + " in " + r.root);
+      }catch(e){
+        w.started[key] = { at: new Date().toISOString(), error: projLine(e && e.message || e, 200), tries: (prev.tries || 0) + 1 };
+        log("✗ “" + c.text + "”: " + w.started[key].error);
+      }
+      dirty = true;
+    }
+  }
+  if(dirty){ ttWatchPrune(w); ttWatchWrite(w); }
+  return out;
+}
+function ttWatchLog(m){ process.stderr.write("tabtree watch " + new Date().toISOString().slice(11, 19) + " " + m + "\n"); }
+let ttWatchBusy = false;
+async function ttWatchOnce(log){
+  if(ttWatchBusy) return null;   // un tour lent (le prompt lit la bibliothèque) ne s'empile pas sur le suivant
+  ttWatchBusy = true;
+  try{ return await ttWatchTick(log); }
+  catch(e){ log("! " + projLine(e && e.message || e, 200)); return { error: projLine(e && e.message || e, 200) }; }
+  finally{ ttWatchBusy = false; }
+}
+// Le mode autonome (`--watch`) : pour qui veut un veilleur hors de toute session Claude Code. `--once` fait un tour et le dit en JSON.
+async function ttWatchMain(once){
+  if(!CLOUD || !API_KEY_OK){ process.stderr.write("TabTree watch: set TABTREE_API_KEY to a connector key (tt_live_…).\n"); process.exit(1); }
+  const w = ttWatchRead();
+  const r = await ttWatchOnce(ttWatchLog);
+  if(once){ ttWatchUnlock(); process.stdout.write(JSON.stringify(r || {}) + "\n"); process.exit(0); }
+  ttWatchLog((w.on ? "on" : "off") + ", " + w.repos.length + " linked repository(ies), every " + (TT_WATCH_MS / 1000) + " s. Ctrl-C stops.");
+  setInterval(()=>ttWatchOnce(ttWatchLog), TT_WATCH_MS);
+  for(const s of ["SIGINT", "SIGTERM"]) process.on(s, ()=>{ ttWatchUnlock(); process.exit(0); });
+}
+// Dans le serveur MCP du plugin (`TABTREE_WATCH=1`, posé par plugin/.mcp.json et par rien d'autre) : le même tour, muet.
+// Les minuteries sont `unref` : elles ne retiennent pas le processus quand Claude Code ferme le transport.
+function ttWatchEmbed(){
+  if(process.env.TABTREE_WATCH !== "1" || !CLOUD || !API_KEY_OK) return;
+  const quiet = ()=>{};
+  setTimeout(()=>ttWatchOnce(quiet), 3000).unref();
+  setInterval(()=>ttWatchOnce(quiet), TT_WATCH_MS).unref();
+  process.stdin.on("end", ttWatchUnlock);
+}
+
 const TT_MODE = HOSTED ? "--hosted" : process.argv[2];
 if(TT_MODE === "--hosted"){ /* importé par l'edge function : aucune entrée standard, aucune commande */ }
 else if(TT_MODE === "--plugin") ttPlugin(process.argv.slice(3));
 else if(TT_MODE === "--hook") ttHook(process.argv[3]);
+else if(TT_MODE === "--watch") ttWatchMain(process.argv.includes("--once"));
 else {
+  ttWatchEmbed();
   let buf = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", chunk=>{
