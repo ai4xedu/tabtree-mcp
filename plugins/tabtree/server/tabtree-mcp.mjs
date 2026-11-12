@@ -2007,7 +2007,7 @@ function countForest(roots){ return roots.reduce((n,r)=>n + countNodes(r), 0); }
 // `badd`, `bset`, `bdel`, `bimg` (1.14.0) : les éléments d'un board. Claude ne les ÉCRIT pas sous ces noms : `buildBoardOps` les fabrique depuis add_image, move…
 // `star` (1.15.0, 2026-11-02) : une ⭐ sur une carte, pour l'utilisateur du compte — un signet PERSONNEL (`settings.stars` de son compte,
 // jamais le document). La proposition va dans la boîte de l'appelant, donc c'est son app qui la pose, par son unique écrivain (`starToggle`).
-const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg","star","place","collab","bp"];
+const PROP_OPS = ["add","rename","note","check","delete","move","pic","img","persona","tags","assign","priority","due","attr","comment","est","start","cols","link","vote","format","season","style","badd","bset","bdel","bimg","star","place","collab","bp","biz"];
 // ⚡ Les ops que l'app applique D'ELLE-MÊME (1.5.0, décidé « hybride » le 2026-10-20) — ≡
 // `PROP_AUTO_OPS` d'app/index.html (le test compare les deux). Plus `cols` quand le tableau n'a
 // pas encore de colonnes (`seed`). C'est l'APP qui décide : le connecteur ne fait que demander
@@ -2020,7 +2020,7 @@ const PROP_AUTO_OPS = ["add","move","check","tags","assign","priority","due","st
 // un attribut « Lever: <clé> » (c'est ainsi que l'app le range, `KB_LEVER_ATTR`), `columns` est le
 // nom lisible de `cols`. `bp` n'en est PAS : seul `plan_system` le dépose, avec son blueprint relu par `bpClean` — par
 // `propose_changes` il partirait sans charge, et l'app jetterait la proposition.
-const INPUT_OPS = PROP_OPS.filter(x=>!["badd","bset","bdel","bimg","bp"].includes(x)).concat(["lever", "columns"]);
+const INPUT_OPS = PROP_OPS.filter(x=>!["badd","bset","bdel","bimg","bp","biz"].includes(x)).concat(["lever", "columns"]);
 // Les quatre leviers Ai4X — ≡ les clés de `KB_LEVERS` d'app/index.html (le test compare).
 const KB_LEVER_KEYS_MCP = ["human","think","accelerate","automate"];
 // Un identifiant de nœud neuf, de la forme qu'`okNodeId` accepte. Posé sur chaque `add` (`nid`) :
@@ -2734,6 +2734,22 @@ function okDate(v){
     return (y >= 1970 && y <= 2100) ? v : null;
   }
 function kbStrOk(v, max){ return (typeof v === "string") ? v.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max) : ""; }
+// 📘 COPIÉS de src/js/3149-business-plan.js (comparés par le test) : `start_business_plan` dépose les quatre champs du
+// dialogue, relus par la MÊME frontière que l'app ; l'app compile le classeur au clic.
+const BIZ_AUD = {
+    investors: { en:"investors", fr:"les investisseurs", tag:{ en:"Investors", fr:"Investisseurs" } },
+    bank:      { en:"the bank",  fr:"la banque",         tag:{ en:"Bank",      fr:"Banque" } },
+    grant:     { en:"the grant", fr:"la subvention",     tag:{ en:"Grant",     fr:"Subvention" } },
+    internal:  { en:"the team",  fr:"l'équipe",          tag:{ en:"Internal",  fr:"Interne" } }
+  };
+function bizClean(raw){
+  const o = raw && typeof raw === "object" ? raw : {};
+  const name = kbStrOk(o.name, 60);
+  if(!name) return { ok:false, why:"name" };
+  return { ok:true, biz:{ name, lang: o.lang === "fr" ? "fr" : "en",
+    audience: Object.prototype.hasOwnProperty.call(BIZ_AUD, o.audience) ? o.audience : "investors",
+    horizon: +o.horizon === 5 ? 5 : 3 } };
+}
 // 🏗 COPIÉ de src/js/3145-blueprint.js (comparé par le test) : le connecteur VALIDE le blueprint, l'app le compile.
 const BP_KINDS = ["crm", "launch", "hiring", "ops"];
 const BP_LANES = ["human", "agent", "pair"];
@@ -4626,14 +4642,14 @@ function kbStandup(r, cols, log, since, now, stuckS){
   const wip = (cols || []).filter(c => !c.done && c.wip && (inCol.get(c.id) || 0) > c.wip).map(c => [c.name, inCol.get(c.id) || 0, c.wip]);
   const loadL = [...load.values()].sort((a, b) => (b.work - a.work) || (b.open - a.open) || a.who.localeCompare(b.who)).map(L => [L.who, L.open, L.work, L.tsec]);
   const forecast = kbForecast(r, cols, log, now, today);
-  return { since, now, moves, open, silent: moves === 0, done, started: startedL, added, left, stuck, waiting, overdue, wip, load: loadL, stuckDays: Math.round(stuckLim / 86400), forecast };
+  return { since, now, moves, open, silent: moves === 0, done, started: startedL, added, left, stuck, waiting, overdue, wip, load: loadL, stuckDays: Math.round(stuckLim / 86400), forecast, soil: typeof sgSoil === "function" ? sgSoil(r, cols, log, now) : undefined };
 }
 const KB_UNBLOCK_MAX = 20;
-function kbUnblockFacts(r, cols, log, now){
-  const su = kbStandup(r, cols || [], log || [], now - 86400, now);
+function kbUnblockFacts(r, cols, log, now, max){
+  const su = kbStandup(r, cols || [], log || [], now - 86400, now), cap = max == null ? KB_UNBLOCK_MAX : max;
   const seen = new Set(), cards = [];
   const add = (id, text, who, why, detail) => {
-    if(!id || seen.has(id) || cards.length >= KB_UNBLOCK_MAX) return;
+    if(!id || seen.has(id) || cards.length >= cap) return;
     seen.add(id); cards.push({ id, text, who, why, detail });
   };
   for(const b of kbBlocked(r, cols || [])) add(b[0], b[1], b[2], b[3] === "block" ? "marked Blocked" : "waits on an open card", b[3] === "block" ? "" : b[4]);
@@ -5048,6 +5064,21 @@ const TOOLS = [
     } }
   },
   {
+    name: "start_business_plan",
+    description: "Opens a BUSINESS PLAN in TabTree, in one call: an empty board named “📘 Business plan — <company>” appears in the user's library with a banner; "
+      + "the user checks the four fields and clicks Build, and TabTree writes five documents — the board of twelve sections, the plan page, the financial model sheet, "
+      + "the business model canvas and the competitor grid — without any AI. Then work the sections one by one: card_prompt on a section card, write it with the user, "
+      + "deliver_card to put it on the card for review. Never invent figures, clients or market sizes: a number has a source the user gave, or it is written as an assumption. "
+      + "Nothing appears until TabTree is open on one of the user's devices. Needs the TabTree account (a connector key).",
+    inputSchema: { type:"object", required:["name"], properties:{
+      name:{ type:"string", description:"The company's name (60 characters at most)." },
+      lang:{ type:"string", enum:["en", "fr"], description:"The plan's language. Default: en." },
+      audience:{ type:"string", enum:["investors", "bank", "grant", "internal"], description:"Who reads the plan. Default: investors." },
+      horizon:{ type:"integer", enum:[3, 5], description:"Years of the financial model. Default: 3." },
+      space:{ type:"string", description:"The space to create the plan in (a name). Default: Personal." }
+    }, additionalProperties:false }
+  },
+  {
     name: "propose_changes",
     description: "Changes an EXISTING mind map, kanban or BOARD (also one in a team space). ON A BOARD, target elements by the ids read_map shows (sh:2, im:7, st:0), or an image by its exact name: add_image { file | url | data, name, alt, x, y, w, h } or { ..., inside: \"sh:2\" } — placed below what that shape already holds, in centred rows, never overlapping, on top of the shape; with both w and h the image is FITTED into that cell with its proportions kept; add_shape { type, x, y, w, h, text, color }, add_text { x, y, text }, move { target, x, y } or { target, dx, dy }, resize { target, w, h }, label { target, name, alt } to name an existing image, arrange { target: \"sh:2\", images: [ids or names], w, h } to line images up inside a shape (omit images to tidy all it holds), and delete { target }. All but delete are applied by TabTree itself; delete waits for review. Sending the same add twice never makes a duplicate: images are matched by name, which defaults to the file's name. On a mind map or kanban, HYBRID, by design: SAFE changes — add cards or branches, move a card to a column, tick it, set its owner, dates, priority, labels, estimate, Ai4X lever, an attribute, a link, a comment, a picture, a ⭐ star for the user, the map's format, the running sprint's goal when none is typed yet (op season), and set up the columns of a board that has none — are APPLIED BY TABTREE ITSELF within seconds when TabTree is open on one of the user's devices (otherwise the next time it opens), and Cmd+Z undoes them. Filling an EMPTY note is safe too (TabTree checks it is still empty when it applies it). Changes that rewrite or remove what someone wrote — rename, rewriting a written note, delete, replacing existing columns, replacing a sprint goal someone typed, a persona re-cast — appear as a banner for the user to review and approve. In one call, the safe changes BEFORE the first review-only change apply by themselves and the rest goes to review, in order. Name each target node by its exact text, or by a path \"Ancestor > Node\" when the same wording appears twice; a later change may target a node added earlier in the same call. Read the map first so the wording matches.\n\n"
       + "STEERING A 🗂 PROJECT (format projet) — no extra tool, four safe changes: (1) read_map and use its “🗂 Project” block — the live sprint's counts and the Backlog ranked by ICE = Impact × Confidence × (6 − Effort), from the cards' (or their epic's) `Impact:` / `Confidence:` / `Effort:` attributes; (2) plan the next sprint by pulling the top of that ranking from Backlog into “To do” with `move` — keep the work-in-progress to about 6 committed cards in total (committed = everything off Backlog), fewer if some are still Doing; (3) set the running sprint's goal with { op: \"season\", goal: \"…\", name: \"Sprint 2\" } — it lands in the 🎯 chip and the 🏁 panel, by itself when nobody typed one, for review otherwise (set \"Sprint length\" / \"Sprints start\" once on the ROOT with `attr`); (4) settle a bet with { op: \"attr\", target: \"<epic text>\", name: \"Verdict\", value: \"validated\" } — untested, testing, validated or invalidated. Give each change a `why`. Add a new epic with `add` under “🧱 Epics” (its four attribute lines and its cards in one markdown), a decision with `add` under “📝 Decisions”, and turn an existing map into a project with { op: \"format\", format: \"projet\" }. The user closes a sprint in TabTree's 🏁 panel; the connector never closes one."
@@ -5204,6 +5235,7 @@ const TOOL_ANNOTATIONS = {
   plant_project:   { title: "Plant a project as a tree",           readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   create_board:    { title: "Create a whiteboard",                 readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   create_kanban:   { title: "Create a kanban board",               readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  start_business_plan: { title: "Open a business plan (built after a click)", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   plan_system:     { title: "Plan a whole system from a brief (built after review)", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   propose_changes: { title: "Change a map (safe changes apply, others wait for review)", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   harvest:         { title: "Keep what matters from this conversation", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -5367,6 +5399,21 @@ const HANDLERS = {
       + (c.bp.systems.length ? `, systems: ${c.bp.systems.map(s=>s.kind).join(", ")}` : "") + "."
       + (dropped ? `\n${dropped} item(s) were left out by TabTree's checks: ${JSON.stringify(c.dropped)}.` : "")
       + `\nTell the user: an empty board “${c.bp.name}” is in their library, and the plan waits on the library screen of TabTree — they can change the horizon, how much Claude takes, the systems and who holds each role, then click “Build it”. Nothing is built until they click, and nothing appears until TabTree is open on one of their devices.`;
+  },
+  async start_business_plan(args){
+    if(!CLOUD) throw new Error("start_business_plan needs the TabTree account (a connector key): TabTree builds the plan in the app. Open TabTree → ⚙️ Settings → Account → Claude connector.");
+    const c = bizClean(args);
+    if(!c.ok) throw new Error("The business plan needs the company's `name`.");
+    const B = c.biz, fr = B.lang === "fr";
+    // La maison VIDE porte le nom que `bizCompile` lui donne : « Build » la remplit sans en créer une seconde.
+    const home = "📘 Business plan — " + B.name;
+    const doc = buildKanbanDoc({ name: home, cards: [] });
+    const info = await writeDoc(home, doc, null, { kind: "kanban", space: args.space, info: true });
+    const map = { file: info.id, key: info.key, owner: info.owner, team: info.team, name: home };
+    await writeProposal(map, home, [{ op: "biz", biz: B }], { review: true, extra: { origin: "bizplan", title: B.name } });
+    return `📘 Opened “${home}” — ${fr ? "French" : "English"}, for ${BIZ_AUD[B.audience].en}, a ${B.horizon}-year financial model.`
+      + `\nTell the user: an empty board “${home}” is in their library with a banner — they check the four fields and click Build, and TabTree writes five documents (the twelve-section board, the plan page, the financial model, the business model canvas, the competitor grid). Nothing is built until they click, and nothing appears until TabTree is open on one of their devices.`
+      + `\nThen work the sections one at a time: read_map on “${home}”, card_prompt on a section card, write it with the user, and deliver_card it for review. Never invent a figure: each number has a source the user gave, or it is marked as an assumption.`;
   },
   async create_board(args){
     const elements = await resolveImageUrls(args.elements, "elements", e=>e.kind === "image");
@@ -5919,7 +5966,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.28.0" }
+      serverInfo: { name: "tabtree", version: "1.29.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "tabtree",
   "display_name": "TabTree",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "description": "Read your TabTree library and build mind maps, kanban boards and whiteboards from a conversation.",
   "long_description": "Tell Claude \"turn these meeting notes into a mind map\", \"make a kanban for the launch with these tasks\" or \"draw our database schema as a board\", and the result appears in your TabTree account — on your laptop and your phone, and in your team spaces for every member.\n\nAsk it to \"add these three tasks to the sprint board, for Sara, due Friday\" and they appear on the board by themselves within seconds, while TabTree is open — Cmd+Z undoes them. Changes that rewrite or remove what someone wrote (renaming, deleting, rewriting a note) are shown to you first, as a banner on that map: you tick what you want and apply it.\n\nTo connect: paste your connector key below. Create it in TabTree → Settings → Account → Claude connector.\n\nThe connector never overwrites or deletes a map, and never touches your browser storage.",
   "author": {
@@ -72,6 +72,10 @@
     {
       "name": "plan_system",
       "description": "Plans a whole project from a brief — work for people, Claude or both, Build and Run sides, systems — and lets you build it with one click in TabTree."
+    },
+    {
+      "name": "start_business_plan",
+      "description": "Opens a business plan in TabTree — you click Build, TabTree writes the board of twelve sections, the plan page, the financial model, the business model canvas and the competitor grid."
     },
     {
       "name": "propose_changes",

@@ -83,14 +83,15 @@ Or in your client's config:
 }
 ```
 
-Sixteen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
+Seventeen tools: `list_maps`, `read_map`, `search_maps`, `create_mindmap`, `plant_project`
 (a brief becomes a tree — roots, branches, birds), `create_kanban`, `create_board` (with
 your own images, and tables), `plan_system` (a whole system from a brief, built after review),
 `propose_changes`, `harvest`, `fill_knowledge`, `card_prompt`, `deliver_card`, and
 `board_numbers` (a kanban's burnup, what is blocking, cycle time and forecast — the numbers
 of TabTree's dashboard), `dispatch_cards` (the cards given to Claude that are ready to start, for
-`/tabtree:dispatch`), and `agent_runs` (the cards scheduled for an agent run today, for
-`/tabtree:run-due`). The connector **never overwrites or deletes a map**. Safe changes to an
+`/tabtree:dispatch`), `agent_runs` (the cards scheduled for an agent run today, for
+`/tabtree:run-due`), and `start_business_plan` (opens an empty business plan board; you click Build
+in TabTree, for `/tabtree:business-plan`). The connector **never overwrites or deletes a map**. Safe changes to an
 existing map (add a card, move it, tick it, assign it, date it, comment on it) are applied by
 TabTree itself while it is open, and Cmd+Z undoes them; anything that rewrites or removes
 what someone wrote is shown to you first, as a banner on that map. Full detail in
@@ -125,6 +126,7 @@ into a file of your repository.
 | `/tabtree:dispatch` | In Claude's Code tab: opens one conversation per card given to Claude (its paper bird), four at most per run. Each conversation sets the card's `Test` link (a URL or a file path) as soon as there is something to try, and delivers the card for review. |
 | `/tabtree:run-due` | Runs the cards scheduled for an agent run today (an `Agent run: YYYY-MM-DD` attribute), three at most, and delivers each one for your review. The scheduled task « TabTree — agent runs » calls it. |
 | `/tabtree:watch` | Turns on the watcher for this repository: a card given to Claude that enters « Doing » opens a Claude Code session here by itself — only when the card is ready for an agent; otherwise one comment says what is missing. |
+| `/tabtree:business-plan` | Writes a business plan with you, section by section: gathers your sources, fills the company knowledge, opens the plan in TabTree (you click Build), then drafts each of the twelve sections for your approval. |
 | `atelier-vision-okr` | Facilitates a vision / mission / OKR session — in French, the language it was built to run workshops in — and writes the result as a canvas you can present. |
 
 Once a repository is linked, each session starts with a one-paragraph summary of the board

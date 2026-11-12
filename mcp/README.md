@@ -70,6 +70,7 @@ that reads a JSON config:
 | `plant_project` | **“Plant me the project.”** Turns a project brief into a TabTree **tree** in one call: the why and the risks grow as roots under the ground (a priority-1 risk is the thickest root), the work streams as branches, the tasks as twigs — an owner is a bird, a due date within 3 days makes the branch sway, a done task is a ripe fruit. TabTree then diagnoses the shape and picks the species (a baobab when three branches carry the work, a fir for a long backlog, a cedar for a deep strategy…), and Claude tells you which tree your project is, and why. |
 | `create_kanban` | Creates a kanban board in one go: columns, and cards with owners, start and due days, priority, colour labels, time estimates, an Ai4X lever, a note (a Google Meet link in it becomes clickable), a link and sub-tasks. |
 | `create_board` | Creates a whiteboard — shapes, **tables** (`kind: "table"` + `cells`: a comparison, a pricing grid, a RACI — with logos or big titles **inside** cells via `cell: { table, row, col }`, taller rows via `rowHeights`, `valign: "middle"`), **images** (`kind: "image"` + a PNG/JPEG/WebP/GIF/SVG `file`: logos, photos, posters) and arrows that stay anchored in the app. |
+| `start_business_plan` | **Opens a business plan.** Give the company's name, the language, who reads it (investors, the bank, a grant, the team) and the horizon (3 or 5 years): an empty board “📘 Business plan — <name>” appears with a banner, you click **Build**, and TabTree writes five documents without any AI — the board of twelve section cards, the plan page, the financial model sheet, the business model canvas and the competitor grid. Then Claude drafts each section with `card_prompt` and `deliver_card`, and you approve each one. The TabTree plugin's `/tabtree:business-plan` runs the whole flow, knowledge first. |
 | `propose_changes` | Changes a map, kanban or board you already have — see below. On a board: `add_image` (from a file, or an https `url` on a public website; also `inside` a shape, laid out with no overlap), `add_shape`, `add_text`, `move`, `resize`, `label`, `arrange`, `delete`, by the ids `read_map` shows. Sending the same image name twice never makes a duplicate. On a kanban or map, `star` puts a ⭐ on a card for you (it shows in ✅ My work; `value: false` removes it), applied by TabTree itself. On a kanban, `place` puts a card where the 🎨 Board view draws it (`x`, `y` = its top-left corner); a shape there named after a column, a day or a person is a zone, and the move, due date or owner it implies is added for you. An image added by `url` keeps where it came from (`from`); `read_map` shows it, and a published page lists the sources. |
 | `harvest` | Keeps what matters from the conversation — facts, decisions, lessons — in your Company knowledge and 🌱 Lessons maps. Nothing is filed until you accept it in TabTree. |
 | `fill_knowledge` | Fills your **knowledge base** — projects, products, topics, clients, people, your company and brands, partners — up to 30 objects per call, each with a short definition, its other names and a few facts. An object already there (same name or alias) is updated, never duplicated. It all waits in TabTree as one proposal: one click applies it. TabTree's 🪄 card prompts then carry these definitions as context. |
@@ -309,5 +310,12 @@ cartes, cocher, poser un responsable, des dates, des étiquettes, une estimation
 un levier Ai4X s'applique tout seul en quelques secondes (⌘Z l'annule) ; renommer,
 réécrire une note ou supprimer vous est d'abord présenté, et rien n'est appliqué
 sans votre clic. Il n'écrase ni ne supprime jamais une carte.
+
+**Un business plan** : demandez à Claude d'en ouvrir un (`start_business_plan`). Un
+tableau vide « 📘 Business plan — <nom> » apparaît avec un bandeau ; un clic sur
+**Build** y écrit, sans IA, les douze sections, la page du plan, le modèle financier,
+le Business Model Canvas et la grille des concurrents. Claude rédige ensuite chaque
+section, et chacune attend votre clic. Le plugin TabTree le fait de bout en bout :
+`/tabtree:business-plan`.
 
 Support : info@ai4x.academy
