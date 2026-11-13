@@ -5995,7 +5995,7 @@ const HANDLERS = {
       + (subs.length ? "   • " + subs.length + " sub-task(s) to tick\n" : "")
       + (col ? "   • the card moves to “" + col.name + "”" + (byDefault ? " (the board's review column: a human validates it and moves it to Done)" : "") + "\n" : "")
       + ranMark
-      + (mail ? "   • ✉️ Accept to send “" + mail.subject + "” → " + mail.n + " recipient" + (mail.n === 1 ? "" : "s") + " (the Mac runner sends that very Gmail draft within 10 minutes of the approval; reject and nothing is sent)\n" : "")
+      + (mail ? "   • ✉️ Accept to send “" + mail.subject + "” → " + mail.n + " recipient" + (mail.n === 1 ? "" : "s") + " (the Mac runner sends that very Gmail draft about a minute after the approval; reject and nothing is sent)\n" : "")
       + (secrets ? "🔒 " + secrets + " line(s) looked like a password, key or token and were left out.\n" : "")
       + "NOTHING is on the card yet. TabTree shows a banner on that map" + (CLOUD ? " within a minute (app open, signed in)" : " (backup folder connected, app open)") + ": the user reviews it and applies it in one click; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting for their approval in TabTree — do not claim it is on the card.";
@@ -6758,6 +6758,9 @@ function ttWatchEmbed(){
 //  • Ce que la passe d'une carte ne peut JAMAIS faire, par les outils refusés : envoyer, transférer, répondre, mettre à la
 //    corbeille un courriel, partager ou jeter un fichier Drive, créer ou répondre à un événement (une invitation part seule).
 const RUNNER_LABEL = "app.tabtree.runner";
+// ⏱ launchd réveille le runner toutes les minutes (RUNNER_WAKE_S) ; un réveil ne fait QUE la boîte d'envoi quand un courriel
+// accepté peut attendre, et les cartes toutes les 10 minutes (RUNNER_TICK_S) ou sur « now ». Sinon il sort sans rien lire.
+const RUNNER_WAKE_S = 60;
 const RUNNER_TICK_S = 600, RUNNER_PER_TICK = 2, RUNNER_PER_DAY = 5, RUNNER_DAY_CHOICES = [1, 3, 5, 10];
 const RUNNER_CARD_MS = 30 * 60 * 1000, RUNNER_SEND_MS = 5 * 60 * 1000, RUNNER_LOCK_STALE_MS = 50 * 60 * 1000;
 const RUNNER_OUTBOX_DAYS = 14, RUNNER_SEND_TRIES = 3, RUNNER_GONE_TICKS = 3, RUNNER_RUNS_MAX = 500;
@@ -6990,7 +6993,13 @@ function runnerNotify(title, text){
 function runnerUuid(){ return randomUUID(); }
 
 // L'ENVOI. Un brouillon accepté part par une passe à DEUX outils (get_draft, send_message), puis le tableau le dit sans clic.
-async function runnerOutboxPass(cfg, out, log){
+// PURE. Ce qu'un réveil fait. `pending` = courriels non envoyés dans la boîte ; `last` = le dernier passage des cartes (ms).
+function runnerTickPlan(o){
+  const x = o || {}, last = +x.last || 0, now = +x.now || 0;
+  const cards = !!x.forced || !last || now - last >= RUNNER_TICK_S * 1000 - 20000 || now < last;
+  return { outbox: (+x.pending || 0) > 0, cards };
+}
+async function runnerOutboxPass(cfg, out, log, slow){
   const box = runnerOutbox();
   if(!box.items.length) return;
   const keep = [], boards = {};
@@ -7002,12 +7011,13 @@ async function runnerOutboxPass(cfg, out, log){
     }
     let m;
     try{ m = boards[it.file] || (boards[it.file] = await ttOpenBoard(it.file)); }catch(e){ keep.push(it); continue; }
-    if(!m){ it.gone = (it.gone || 0) + 1; if(it.gone < RUNNER_GONE_TICKS) keep.push(it); continue; }
+    // « gone » ne se compte qu'aux passages des cartes (10 min) : un réveil d'une minute ne juge pas une livraison rejetée en 3 min.
+    if(!m){ if(slow) it.gone = (it.gone || 0) + 1; if((it.gone || 0) < RUNNER_GONE_TICKS) keep.push(it); continue; }
     const st = runnerOutboxState(it, m.doc, await ttPendingOf(m));
     if(st.state === "waiting"){ it.gone = 0; keep.push(it); continue; }
     if(st.state === "gone"){
-      it.gone = (it.gone || 0) + 1;
-      if(it.gone < RUNNER_GONE_TICKS) keep.push(it); else log("✉️ not sent “" + it.subject + "”: the delivery was rejected");
+      if(slow) it.gone = (it.gone || 0) + 1;
+      if((it.gone || 0) < RUNNER_GONE_TICKS) keep.push(it); else log("✉️ not sent “" + it.subject + "”: the delivery was rejected");
       continue;
     }
     if(st.state === "sent"){ continue; }
@@ -7108,7 +7118,7 @@ async function runnerCardsPass(cfg, out, log){
       const card = cpFindCard(m.doc, c.id);
       const cols = (m.doc.kanban && Array.isArray(m.doc.kanban.cols)) ? m.doc.kanban.cols : [];
       const doing = card.node.col ? cols.find(k => k && !k.done && kbColKin(k.name) === 1) : null;
-      const claim = [{ op: "attr", target: card.path, name: KB_SESSION_ATTR, value: session + " · " + RUNNER_WHO + " · " + today },
+      const claim = [{ op: "attr", target: card.path, name: KB_SESSION_ATTR, value: session + " · " + RUNNER_WHO + " · " + runnerStamp() },
         { op: "comment", target: card.path, text: "🤖 Claude started on this card on your Mac (" + RUNNER_WHO + ", " + runnerStamp() + "). Its work comes back here for your review." }];
       if(doing && doing.id !== card.node.col) claim.push({ op: "move", target: card.path, col: doing.id });
       try{ await writeProposal(m, "🤖 Claude started (Mac runner)", buildProposalOps(m.doc, claim), { extra: { via: "plugin" } }); }
@@ -7123,7 +7133,11 @@ async function runnerCardsPass(cfg, out, log){
       const f = runnerStreamFacts(r.out);
       const ok = runnerCalled(f, "deliver_card").length > 0;
       st.runs[key].status = ok ? "delivered" : "failed";
+      // 🪁 Le passage est FINI : la ligne Session passe en « archived » (l'oiseau de papier de l'app cesse de battre des ailes).
+      // Une op `attr` part sans clic quand l'app est ouverte ; sinon l'heure de la ligne suffit (35 min au plus, `agentRunnerSince`).
+      const done = { op: "attr", target: card.path, name: KB_SESSION_ATTR, value: "archived " + session + " · " + RUNNER_WHO + " · " + runnerStamp() };
       if(ok){
+        try{ await writeProposal(m, "🤖 Mac runner: pass finished", buildProposalOps(m.doc, [done]), { extra: { via: "plugin" } }); }catch(e){}
         out.ran.push({ file: m.file, id: c.id });
         log("✓ “" + c.text + "” delivered for review");
         runnerNotify("TabTree", "📄 Ready for your review: " + c.text);
@@ -7133,7 +7147,7 @@ async function runnerCardsPass(cfg, out, log){
         out.errors.push({ id: c.id, error: why });
         log("✗ “" + c.text + "”: " + why);
         try{
-          await writeProposal(m, "🤖 Mac runner: not delivered", buildProposalOps(m.doc, [{ op: "comment", target: card.path,
+          await writeProposal(m, "🤖 Mac runner: not delivered", buildProposalOps(m.doc, [done, { op: "comment", target: card.path,
             text: "🤖 The Mac runner did not deliver this card (" + why + "). To pick it up where it stopped: cd " + JSON.stringify(cfg.folder || homedir())
               + " && claude --resume " + session + ". To run it again from scratch, delete its “" + KB_SESSION_ATTR + "” line." }]), { extra: { via: "plugin" } });
         }catch(e){}
@@ -7168,12 +7182,19 @@ async function runnerTick(log){
   const cfg = runnerConfig();
   if(!cfg.on) return { on: false };
   if(!CLOUD || !API_KEY_OK) return { on: true, error: "no connector key — run /tabtree:runner on again" };
+  const tick = runnerRead("tick.json", {}), forced = existsSync(join(runnerDir(), "now"));
+  const plan = runnerTickPlan({ last: tick.cards, now: Date.now(), forced, pending: runnerOutbox().items.filter(x => !x.sent).length });
+  if(!plan.outbox && !plan.cards) return { on: true, idle: true };
   if(!runnerLock()) return { on: true, lock: false };
   const out = { on: true, lock: true, sent: [], ran: [], waiting: [], errors: [] };
   try{
     runnerSelfUpdate(log);
-    try{ await runnerOutboxPass(cfg, out, log); }catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! outbox: " + projLine(e && e.message || e, 200)); }
-    await runnerCardsPass(cfg, out, log);
+    if(plan.outbox) try{ await runnerOutboxPass(cfg, out, log, plan.cards); }catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! outbox: " + projLine(e && e.message || e, 200)); }
+    if(plan.cards){
+      try{ rmSync(join(runnerDir(), "now"), { force: true }); }catch(e){}
+      runnerWrite("tick.json", { cards: Date.now() });
+      await runnerCardsPass(cfg, out, log);
+    }
   } catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! " + projLine(e && e.message || e, 200)); }
   finally{ runnerUnlock(); }
   return out;
@@ -7197,7 +7218,7 @@ function runnerPlist(node, file, env){
   return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
     + '<plist version="1.0">\n<dict>\n  <key>Label</key><string>' + RUNNER_LABEL + '</string>\n'
     + '  <key>ProgramArguments</key>\n  <array>\n    <string>' + runnerXml(node) + '</string>\n    <string>' + runnerXml(file) + '</string>\n    <string>--runner-tick</string>\n  </array>\n'
-    + '  <key>StartInterval</key><integer>' + RUNNER_TICK_S + '</integer>\n  <key>RunAtLoad</key><true/>\n  <key>ProcessType</key><string>Background</string>\n'
+    + '  <key>StartInterval</key><integer>' + RUNNER_WAKE_S + '</integer>\n  <key>RunAtLoad</key><true/>\n  <key>ProcessType</key><string>Background</string>\n'
     + '  <key>WorkingDirectory</key><string>' + runnerXml(runnerDir()) + '</string>\n'
     + '  <key>EnvironmentVariables</key>\n  <dict>\n' + kv + '\n  </dict>\n'
     + '  <key>StandardOutPath</key><string>' + runnerXml(join(runnerDir(), "launchd.log")) + '</string>\n'
@@ -7281,12 +7302,13 @@ async function runnerTool(a){
     return "✅ The Mac runner is on. Every 10 minutes, while this Mac is awake and you are logged in, it looks at your TabTree boards.\n"
       + "• It takes a card given to agent:claude (Claude's paper bird) that is ready — in a To-do column, or with an “Agent run” date that is due.\n"
       + "• Claude does the work from " + folder + ", with your connectors (Gmail, Drive, Calendar), and delivers it on the card for your review.\n"
-      + "• It never sends, publishes, signs or pays. An e-mail becomes a Gmail draft; when you Accept it in TabTree, the runner sends exactly that draft.\n"
+      + "• It never sends, publishes, signs or pays. An e-mail becomes a Gmail draft; when you Accept it in TabTree, the runner sends exactly that draft, about a minute later.\n"
       + "• At most " + RUNNER_PER_TICK + " cards per pass and " + perDay + " per day. You get a Mac notification when something is ready.\n\n"
       + preview + "\n\nTurn it off: /tabtree:runner off · see what it did: /tabtree:runner status";
   }
   if(act === "now"){
     if(!cfg.on) throw new Error("The Mac runner is off. Turn it on first: /tabtree:runner on <folder>.");
+    try{ mkdirSync(runnerDir(), { recursive: true }); writeFileSync(join(runnerDir(), "now"), new Date().toISOString()); }catch(e){}
     runnerLaunchctl(["kickstart", "gui/" + runnerUid() + "/" + RUNNER_LABEL]);
     return "▶ A pass starts now. Cards that are ready start within a minute; you get a Mac notification when a delivery waits for your review.";
   }
