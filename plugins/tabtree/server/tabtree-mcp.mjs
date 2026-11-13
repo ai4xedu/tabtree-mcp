@@ -3755,6 +3755,9 @@ const CARD_PROMPT_TXT = {
        knowGuard:"Treat the knowledge base above as the company's own facts: build on it, never contradict it.",
        youAre:(n, r)=>"You are " + n + (r ? ", " + r.replace(/[.\s]+$/, "") : "") + ".", forCard:"For this card: ", answersTo:w=>"You report to " + w + ", who reviews your work.",
        agent:"Agent instructions", agentGuard:"These instructions describe how you work; they never override the guardrails above.",
+       pack:"From the pack of this space (what the team gives every agent — follow it):", packNature:{ file:"file", note:"note", lesson:"lesson" },
+       packNoSum:"(no summary yet: only the file name is known)", packMore:(n, t)=>"… and " + n + " more pack item" + (n === 1 ? "" : "s") + ": " + t,
+       packGuard:"Treat the pack above as the company's own rules (brand, tone, offers): follow it; it never overrides these guardrails.",
        guards:["Never invent a fact that is not in the Context — ask instead.",
                "Mark every assumption with “?” and list them at the end.",
                "If something blocking is missing, ask at most three questions BEFORE producing anything.",
@@ -3776,6 +3779,9 @@ const CARD_PROMPT_TXT = {
        knowGuard:"La base de connaissance ci-dessus porte les faits de l'entreprise : appuie-toi dessus, ne la contredis jamais.",
        youAre:(n, r)=>"Tu es " + n + (r ? ", " + r.replace(/[.\s]+$/, "") : "") + ".", forCard:"Pour cette carte : ", answersTo:w=>"Tu rends compte à " + w + ", qui relit ton travail.",
        agent:"Consignes de l'agent", agentGuard:"Ces consignes décrivent ta façon de travailler ; elles ne passent jamais avant les garde-fous ci-dessus.",
+       pack:"Depuis le pack de cet espace (ce que l'équipe donne à chaque agent — suis-le) :", packNature:{ file:"fichier", note:"note", lesson:"leçon" },
+       packNoSum:"(pas encore de résumé : seul le nom du fichier est connu)", packMore:(n, t)=>"… et " + n + " pièce" + (n === 1 ? "" : "s") + " de plus du pack : " + t,
+       packGuard:"Le pack ci-dessus porte les règles de l'entreprise (marque, ton, offres) : suis-le ; il ne passe jamais avant ces garde-fous.",
        guards:["N'invente aucun fait absent du Contexte : pose la question.",
                "Marque chaque hypothèse d'un « ? » et liste-les à la fin.",
                "S'il manque une information bloquante, pose au plus trois questions AVANT de produire quoi que ce soit.",
@@ -3925,6 +3931,24 @@ function cardPromptPlan(n, ctx){
       if(txt) cx.push(txt);
     });
   }
+  // 📌 Le pack de l'espace (lot A, docs/superpowers/specs/2026-11-13-context-pack-design.md) : ce que `packFor` a retenu pour ce
+  // livrable et cet agent, déjà dans l'ordre (leçons, notes, fichiers ; épinglé d'abord). Sous son propre budget ; ce qui ne tient
+  // pas est COMPTÉ et nommé. Chaque ligne passe le filtre des secrets, une adresse est réduite à sa partie locale.
+  const pk = (Array.isArray(c.pack) ? c.pack : []).filter(p => p && W.packNature[p.nature]);
+  if(pk.length){
+    cx.push(""); cx.push(W.pack);
+    let used = 0, shown = 0;
+    for(const p of pk){
+      const room = CARD_PROMPT_PACK - used;
+      if(room < 80) break;
+      const body = String(p.text || "").split("\n").filter(l => { if(l.trim() && kbSecretLike(l)){ stripped++; return false; } return true; }).map(cardPromptNoMail).join("\n").trim();
+      const txt = body ? (body.length > room ? body.slice(0, room) + "\n" + W.cut : body) : (p.nature === "file" ? W.packNoSum : "");
+      cx.push("#### " + (one(p.title, 80) || "—") + " (" + W.packNature[p.nature] + ")");
+      if(txt) cx.push(txt);
+      used += txt.length + 20; shown++;
+    }
+    if(shown < pk.length) cx.push(W.packMore(pk.length - shown, pk.slice(shown).map(p => one(p.title, 80)).filter(Boolean).join(", ")));
+  }
   // --- Task ---
   const tk = [one(n.text, 300) || "—"];
   const note = String(n.note || "").split("\n").filter(l => { if(kbSecretLike(l)){ stripped++; return false; } return true; })
@@ -3963,6 +3987,7 @@ function cardPromptPlan(n, ctx){
     }
   }
   if(kn.length || pas.length) gd.push((gd.length + 1) + ". " + W.knowGuard);
+  if(pk.length) gd.push((gd.length + 1) + ". " + W.packGuard);
   const rules = (c.rules || []).map(r => ({ t: one(r && r.t, 300), from: r && r.from })).filter(r => r.t);
   if(rules.length){
     gd.push(""); gd.push(W.rules);
@@ -4238,6 +4263,63 @@ function agentsOfMap(book, m){
 // L'agent qui travaille la carte : une fiche ici, jamais Claude ni un agent sans fiche (D5 : un seul par carte).
 function agentOfNode(here, node){ const s = agentOnCard(node && node.assign); return s && s !== "claude" && here ? here.get(s) || null : null; }
 function agentLabel(a){ return "🪁 " + a.name + (a.role ? " — " + a.role : ""); }
+// 📌 LE PACK DE CONTEXTE (lot A, docs/superpowers/specs/2026-11-13-context-pack-design.md) : ce qu'un espace donne à chaque agent —
+// la charte, le ton, les offres —, lu UNE fois par l'action `pack` (0076) et gardé 10 min. `packFor` et `packPromptItem` sont des
+// COPIES CONFORMES de l'app (src/js/1363-context-pack.js, comparées par `CP_HEADS`). Au lot A, seul le TEXTE voyage : la note d'une
+// note, le résumé d'un fichier. Une edge function ancienne, une base sans la 0076 ou le mode dossier rendent un pack vide : le prompt
+// est alors celui d'avant, octet pour octet.
+const CARD_PROMPT_PACK = 6000;
+const PACK_NATURES = ["lesson", "note", "file"];
+// PURE. Les pièces qui entrent dans le prompt d'UNE carte : celles dont les types de livrable (vide = tous) contiennent le type de
+// la carte ET dont les agents (vide = tous) contiennent l'agent de la carte (`claude` par défaut). Ordre : leçons, notes,
+// fichiers ; une pièce épinglée passe devant les autres de sa nature ; puis le titre.
+function packFor(items, q){
+  const kind = q && typeof q.kind === "string" ? q.kind : "", agent = q && typeof q.agent === "string" && q.agent ? q.agent : "claude";
+  const rank = p => PACK_NATURES.indexOf(p.nature);
+  return (Array.isArray(items) ? items : [])
+    .filter(p => p && rank(p) >= 0)
+    .filter(p => !(p.kinds || []).length || (kind && p.kinds.includes(kind)))
+    .filter(p => !(p.agents || []).length || p.agents.includes(agent))
+    .slice().sort((a, b) => (rank(a) - rank(b)) || ((b.pin ? 1 : 0) - (a.pin ? 1 : 0)) || String(a.title).localeCompare(String(b.title)));
+}
+// PURE. Ce que le prompt lit d'une pièce : son titre, sa nature, et son TEXTE — la note d'une note (son résumé s'il n'a pas de
+// note), le résumé d'un fichier ou d'une leçon. Jamais un chemin, un type de fichier ni une taille.
+function packPromptItem(p){
+  const text = p.nature === "note" ? (String(p.body || "").trim() || String(p.summary || "")) : String(p.summary || "");
+  return { nature: p.nature, title: String(p.title || ""), text: text.trim() };
+}
+function okPackMcp(rows){
+  const out = [];
+  if(!Array.isArray(rows)) return out;
+  const str = (v, n)=>typeof v === "string" ? v.slice(0, n) : "";
+  const uuid = v=>typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  for(const r of rows.slice(0, 400)){
+    if(!r || typeof r !== "object" || !uuid(r.id) || !uuid(r.owner) || !PACK_NATURES.includes(r.nature)) continue;
+    const space = typeof r.space === "string" && (r.space === "" || /^[A-Za-z0-9_]{1,64}$/.test(r.space)) ? r.space : null;
+    if(space === null) continue;
+    const title = str(r.title, 80).replace(/[\u0000-\u001f\u007f]/g, " ").trim(); if(!title) continue;
+    out.push({ id: r.id.toLowerCase(), owner: r.owner.toLowerCase(), space, nature: r.nature, title,
+      summary: str(r.summary, 2000), body: r.nature === "note" ? str(r.body, 8000) : "",
+      kinds: Array.isArray(r.kinds) ? r.kinds.filter(k=>typeof k === "string" && /^[a-z]{1,16}$/.test(k)).slice(0, 24) : [],
+      agents: Array.isArray(r.agents) ? r.agents.filter(a=>typeof a === "string" && /^[a-z0-9-]{1,24}$/.test(a)).slice(0, 12) : [],
+      pin: r.pin === true });
+  }
+  return out;
+}
+async function packBookLoad(){
+  if(!CLOUD) return [];
+  const c = reqCtx();
+  if(c.packBook && Date.now() - c.packBook.at < AGENT_BOOK_MS) return c.packBook.list;
+  let list = [];
+  try{ list = okPackMcp((await cloudCall("pack", {})).pack); }catch(e){ list = []; }
+  c.packBook = { at: Date.now(), list };
+  return list;
+}
+// Les pièces de l'ESPACE d'une carte (D9 : jamais un autre espace) : son propriétaire, son espace ("" = Personal).
+function packOfMap(book, m){
+  const own = String((m && m.owner) || "").toLowerCase(), sp = (m && m.spaceKey) || "";
+  return (book || []).filter(p=>p.owner === own && p.space === sp);
+}
 
 function cpContext(m, lib, card, opts){
   const o = opts || {}, doc = m.doc, root = doc.root, n = card.node;
@@ -5280,6 +5362,21 @@ const TOOLS = [
     }, required:["entries"], additionalProperties:false }
   }
   ,{
+    name: "pack_add",
+    description: "Puts ONE note or file from this Mac into the CONTEXT PACK of a TabTree space — the short notes and documents (brand charter, offers, tone of voice) that every card prompt of that space carries to the agents. Use it when the user asks to put a note of their vault or second brain into a space's pack (\"put my offers note in the Ai4X pack\"). The item keeps its SOURCE (e.g. \"YG-OS/2_MIND/offres.md\"): pushing the same note again UPDATES it, never makes a second one. It is written at once (the user asked for it), and only the owner or an admin of the space can change its pack. A note of 8000 characters at most; a PDF, PNG, JPEG, WebP or GIF of 5 MB at most. Never a password, key or token: a note that holds one is refused. Push the parts that matter, never a whole vault.",
+    inputSchema: { type:"object", properties:{
+      space:   { type:"string", description:"The space whose pack gets the item, by name (list_maps shows them). Omit for Personal. A pack never crosses spaces: if two could apply, ASK the user." },
+      file:    { type:"string", description:"The note or file on this Mac: its full path (.md, .markdown, .txt become a note; .pdf, .png, .jpg, .webp, .gif a file). Not available in the hosted connector — give `text` there." },
+      text:    { type:"string", description:"Instead of `file`: the note's text itself (Markdown). `source` is then required." },
+      source:  { type:"string", description:"Where the note comes from, e.g. \"YG-OS/2_MIND/offres.md\" — the item's identity: the same source updates the same item. Left out with `file`, it is the file's path inside its vault or repository (never the full path of the Mac). 200 characters max." },
+      title:   { type:"string", description:"Optional: the item's name in the pack. Left out: the note's title (front matter, or its first # heading), else the file name. 80 characters max." },
+      summary: { type:"string", description:"Optional: one or two sentences saying what it is and when an agent should use it. For a file, agents read this summary, not the file itself: without one, the file only gives its title. 2000 characters max." },
+      kinds:   { type:"array", items:{ type:"string" }, description:"Optional: the deliverable kinds it serves (email, slides, spreadsheet, document, post…). Left out: every card." },
+      agents:  { type:"array", items:{ type:"string" }, description:"Optional: the space's agents it is for, by their id (e.g. pic). Left out: every agent." },
+      pin:     { type:"boolean", description:"Optional: true to make it ALWAYS part of the prompt, whatever the card." }
+    }, additionalProperties:false }
+  }
+  ,{
     name: "card_prompt",
     description: "Reads ONE card of a TabTree kanban or mind map and returns the prompt TabTree's 🪄 builds for it — Role, Context (board, column, owner, dates, labels, the knowledge-base entries the card is about, relevant passages from the user's other maps in the same space), Task (the card, its spec, its acceptance criteria — and, when the reviewer sent the card back, their last request, first in the Context), Guardrails and Format (picked from the deliverable: spreadsheet, slides, email, code, research, document, plan). Use it when the user asks you to work on, do or prepare a card (\"work on the card X\"). Then do the work following that prompt, and send the result back with deliver_card. Read-only.",
     inputSchema: { type:"object", properties:{
@@ -5358,6 +5455,7 @@ const TOOL_ANNOTATIONS = {
   propose_changes: { title: "Change a map (safe changes apply, others wait for review)", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   harvest:         { title: "Keep what matters from this conversation", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   fill_knowledge:  { title: "Fill the company knowledge base",     readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  pack_add:        { title: "Put a note into a space's context pack", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   dispatch_cards:  { title: "List the cards ready for Claude Code", readOnlyHint: true,  openWorldHint: false },
   deliver_card:    { title: "Deliver work on a card",              readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   agent_runs:      { title: "List the cards due for an agent run", readOnlyHint: true,  openWorldHint: false },
@@ -5767,6 +5865,7 @@ const HANDLERS = {
       + "NOTHING is filed yet. TabTree shows a banner on any device where it is open (otherwise the next time it opens): the user ticks what to keep and accepts it; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting in TabTree — do not claim it is filed.";
   }
+  ,async pack_add(args){ return packAddTool(args || {}); }
   ,async fill_knowledge(args){
     if(!CLOUD) throw new Error("fill_knowledge writes to the user's TabTree ACCOUNT, and this connector reads a backup folder. Connect it with a connector key (TabTree → Settings → Account → Claude connector) — the backup-folder mode does not receive new features.");
     const a = args || {};
@@ -5928,6 +6027,9 @@ const HANDLERS = {
     // 🪁 La carte d'un agent de l'espace : le prompt parle avec SA voix, sous les garde-fous (§ 6.5, comme `cardPromptAgentOf` de l'app).
     const here = agentsOfMap(await agentBookLoad(), m), ag = agentOfNode(here, card.node);
     ctx.agent = ag ? { name: ag.name, role: ag.role, instructions: ag.instructions, owner: ag.ownerEmail } : null;
+    // 📌 Le pack de l'espace : ce qui convient au livrable de la carte (celui demandé, sinon celui qu'elle dit) et à son agent.
+    const packKind = a.kind && cardPromptKindById(a.kind) ? a.kind : cardPromptKind(card.node).id;
+    ctx.pack = packFor(packOfMap(await packBookLoad(), m), { kind: packKind, agent: agentOnCard(card.node.assign) || "claude" }).map(packPromptItem);
     const plan = cardPromptPlan(card.node, ctx);
     const k = cardPromptKindById(plan.kind);
     const how = { attr:"set on the card", title:"read in its title", note:"read in its note", none:"nothing in the card says it", set:"as you asked" }[plan.from] || plan.from;
@@ -5940,6 +6042,7 @@ const HANDLERS = {
       + "Deliverable: " + k.label.en + " (" + how + ") · Knowledge: " + kn
       + (ctx.knowMissing.length ? " · not in the knowledge base: " + ctx.knowMissing.join(", ") : "")
       + (ctx.passages.length ? " · " + ctx.passages.length + " passage(s) from other maps" : "")
+      + (ctx.pack.length ? " · Pack: " + ctx.pack.map(p=>p.title).join(", ") : "")
       + (plan.stripped ? " · 🔒 " + plan.stripped + " line(s) that looked like a password, key or token were left out" : "") + "\n"
       // 🎯 Lu sur la CARTE, jamais sur le `kind` demandé : un livrable choisi pour cet appel n'est pas écrit sur la carte.
       + "Agent-ready: " + agentReadyText(agentReadyGaps(card.node, { from: cardPromptKind(card.node).from, knowledge: ctx.knowledge.length, agents: [...here.keys()] })) + "\n"
@@ -6117,7 +6220,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.33.0" }
+      serverInfo: { name: "tabtree", version: "1.35.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -7322,6 +7425,7 @@ async function runnerTick(log){
     if(plan.cards){
       try{ rmSync(join(runnerDir(), "now"), { force: true }); }catch(e){}
       runnerWrite("tick.json", { cards: Date.now() });
+      await runnerAccountBeat(true, cfg);
       await runnerCardsPass(cfg, out, log);
     }
   } catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! " + projLine(e && e.message || e, 200)); }
@@ -7390,6 +7494,137 @@ function runnerPreviewText(p, cfg){
   }
   return out.join("\n");
 }
+// ---------------------------------------------------------------------------
+// 🌉 LE PONT DU VAULT (1.35.0, lot D de docs/superpowers/specs/2026-11-13-context-pack-design.md, D10)
+//
+// Le second cerveau entre par MORCEAUX CHOISIS : une note, un fichier, nommés par l'utilisateur. Jamais un dossier, jamais une
+// synchronisation. La SOURCE (« YG-OS/2_MIND/offres.md ») est l'identité de la pièce : c'est la base qui la retrouve et met à
+// jour (0077, `zem_mcp_pack_add`). ⚠️ La source est le chemin DANS le vault, jamais le chemin du Mac (il nomme le compte macOS).
+// Le serveur refuse aussi un texte qui ressemble à un secret ; ici on le refuse AVANT, en disant à quelle ligne.
+// ---------------------------------------------------------------------------
+const PACK_ADD_NOTE_EXT = /\.(md|markdown|txt)$/i;
+const PACK_ADD_FILE_MIME = { pdf:"application/pdf", png:"image/png", jpg:"image/jpeg", jpeg:"image/jpeg", webp:"image/webp", gif:"image/gif" };
+const PACK_ADD_FILE_MAX = 5 * 1024 * 1024;
+const PACK_ADD_BODY_MAX = 8000;
+const PACK_ADD_ROOT_MARKS = ["CLAUDE.md", "INDEX.md", ".git", ".obsidian"];
+// La source d'un fichier : le nom de la racine (vault ou dépôt : le premier ancêtre qui porte une marque) + le chemin sous elle.
+// Sans racine : le nom du fichier seul. 200 caractères au plus, la FIN gardée (c'est elle qui distingue deux notes).
+function packSourceOf(p){
+  const abs = resolve(p);
+  let dir = dirOf(abs), rel = basename(abs), found = false;
+  for(let i = 0; i < 24 && dir && dir !== "/" && dir !== homedir(); i++){
+    if(PACK_ADD_ROOT_MARKS.some(f=>existsSync(join(dir, f)))){ rel = basename(dir) + "/" + rel; found = true; break; }
+    rel = basename(dir) + "/" + rel; dir = dirOf(dir);
+  }
+  const src = found ? rel : basename(abs);
+  return src.length <= 200 ? src : "…" + src.slice(src.length - 199);
+}
+// Un chemin qu'on ne lit JAMAIS, même nommé : un dossier caché (.ssh, .config, .env…), une clé ou un fichier décodé.
+function packPathRefused(p){
+  const parts = resolve(p).split("/").filter(Boolean);
+  if(parts.some(x=>x.startsWith("."))) return "it is inside a hidden folder or is a hidden file";
+  const b = basename(p).toLowerCase();
+  if(/ne-jamais-partager|-decode-|^cle-|credential|secret|password|\.p8$|\.pem$|\.key$/.test(b)) return "its name says it holds a key or a secret";
+  return "";
+}
+// Le texte d'une note : sans son en-tête YAML (des métadonnées, pas la note) ; son titre : `title:` de l'en-tête, sinon le premier
+// titre « # », sinon rien.
+function packNoteParts(raw){
+  let text = String(raw || "").replace(/\r\n?/g, "\n").replace(/^\uFEFF/, ""), title = "";
+  const fm = /^---\n([\s\S]*?)\n---[ \t]*(\n|$)/.exec(text);
+  if(fm){
+    const t = /^title:\s*(.+)$/m.exec(fm[1]);
+    if(t) title = t[1].trim().replace(/^["']|["']$/g, "");
+    text = text.slice(fm[0].length);
+  }
+  text = text.trim();
+  if(!title){ const h = /^#\s+(.+)$/m.exec(text); if(h) title = h[1].trim(); }
+  return { text, title };
+}
+function packSecretLines(text){
+  const out = [];
+  String(text || "").split("\n").forEach((l, i)=>{ if(l.trim() && kbSecretLike(l)) out.push(i + 1); });
+  return out;
+}
+function packAddPlan(a){
+  const where = "pack_add";
+  const has = v=>typeof v === "string" && v.trim() !== "";
+  if(has(a.file) && has(a.text)) throw new Error(where + ": give `file` OR `text`, not both.");
+  if(!has(a.file) && !has(a.text)) throw new Error(where + ": give `file` (the note's path on this Mac) or `text` (the note itself, with its `source`).");
+  const item = { nature: "note" };
+  let source = has(a.source) ? hvLine(a.source, 400) : "", title = "", bytes = null;
+  if(has(a.file)){
+    if(HOSTED) throw new Error(where + ": the hosted TabTree connector cannot read a file path — give `text` (the note itself) and its `source`.");
+    const p = resolve(runnerExpand(a.file.trim()) || a.file.trim());
+    const why = packPathRefused(p);
+    if(why) throw new Error(where + ": " + basename(p) + " is not read — " + why + ".");
+    let st; try{ st = statSync(p); }catch(e){ throw new Error(where + ": no file at " + p + "."); }
+    if(!st.isFile()) throw new Error(where + ": " + basename(p) + " is not a file (a pack takes one note or one file at a time, never a folder).");
+    const ext = (/\.([a-z0-9]+)$/i.exec(p) || [])[1];
+    if(PACK_ADD_NOTE_EXT.test(p)){
+      if(st.size > 4 * PACK_ADD_BODY_MAX * 4) throw new Error(where + ": " + basename(p) + " is far too long for a pack note (" + PACK_ADD_BODY_MAX + " characters at most). Push the part that matters with `text`.");
+      const parts = packNoteParts(readFileSync(p, "utf8"));
+      item.body = parts.text; title = parts.title;
+    } else if(ext && PACK_ADD_FILE_MIME[ext.toLowerCase()]){
+      if(st.size > PACK_ADD_FILE_MAX) throw new Error(where + ": " + basename(p) + " is " + (st.size / 1048576).toFixed(1) + " MB — the pack takes files of 5 MB at most.");
+      item.nature = "file"; item.mime = PACK_ADD_FILE_MIME[ext.toLowerCase()];
+      bytes = readFileSync(p); item.data = bytes.toString("base64");
+    } else throw new Error(where + ": " + basename(p) + " is not a note (.md, .txt) nor a PDF, PNG, JPEG, WebP or GIF.");
+    if(!source) source = packSourceOf(p);
+    if(!title) title = basename(p).replace(/\.[a-z0-9]+$/i, "");
+  } else {
+    if(!source) throw new Error(where + ": a note given as `text` needs its `source` (where it comes from, e.g. \"YG-OS/2_MIND/offres.md\") — that is how pushing it again updates it.");
+    const parts = packNoteParts(a.text);
+    item.body = parts.text; title = parts.title;
+  }
+  if(source.length > 200) throw new Error(where + ": `source` is over 200 characters.");
+  item.source = source;
+  item.title = hvLine(has(a.title) ? a.title : title, 80) || hvLine(source.split("/").pop().replace(/\.[a-z0-9]+$/i, ""), 80);
+  if(item.nature === "note"){
+    if(!item.body) throw new Error(where + ": the note is empty.");
+    if(item.body.length > PACK_ADD_BODY_MAX) throw new Error(where + ": the note is " + item.body.length + " characters; a pack note keeps " + PACK_ADD_BODY_MAX + " at most. Push the part agents need with `text` (same `source`), or a shorter note.");
+  }
+  if(has(a.summary)){ item.summary = String(a.summary).replace(/\r/g, "").trim(); if(item.summary.length > 2000) throw new Error(where + ": `summary` is over 2000 characters."); }
+  const lines = packSecretLines(item.body || "");
+  const head = [["title", item.title], ["summary", item.summary || ""], ["source", source]].filter(([, v])=>packSecretLines(v).length).map(([k])=>k);
+  if(lines.length || head.length) throw new Error(where + ": this looks like it holds a password, key or token ("
+    + head.map(k=>"its " + k).concat(lines.length ? ["line " + lines.slice(0, 5).join(", ") + (lines.length > 5 ? "…" : "") + " of the note"] : []).join(", ")
+    + "). Nothing was pushed: every agent of the space reads the pack. Remove it first.");
+  if(Array.isArray(a.kinds)) item.kinds = a.kinds.filter(k=>typeof k === "string" && /^[a-z]{1,16}$/.test(k)).slice(0, 24);
+  if(Array.isArray(a.agents)) item.agents = a.agents.filter(k=>typeof k === "string" && /^[a-z0-9-]{1,24}$/.test(k)).slice(0, 12);
+  if(typeof a.pin === "boolean") item.pin = a.pin;
+  return { item, bytes: bytes ? bytes.length : null };
+}
+async function packAddTool(a){
+  if(!CLOUD) throw new Error("pack_add writes to the user's TabTree ACCOUNT, and this connector reads a backup folder. Connect it with a connector key (TabTree → Settings → Account → Claude connector).");
+  const { item, bytes } = packAddPlan(a);
+  // L'espace, par son nom, comme `fill_knowledge` ; Personal sans nom. C'est la base qui dit qui peut écrire.
+  const j = await cloudCall("list", {});
+  const me = j.me || null, spaces = (j.spaces || []).filter(x=>x && x.space_key);
+  let sp = null;
+  if(a.space != null && String(a.space).trim()){
+    const hits = spaces.filter(x=>hvSame(x.name, a.space));
+    if(!hits.length) throw new Error("No space named “" + a.space + "” in this account" + (spaces.length ? ". Spaces: " + spaces.map(x=>"“" + x.name + "”").join(", ") + " — or omit `space` for Personal" : "") + ".");
+    sp = hits.find(x=>x.owner === me) || hits[0];
+  }
+  const r = await cloudCall("pack_add", Object.assign(sp ? { owner: sp.owner, space: sp.space_key } : { space: "" }, { item }));
+  const it = (r && r.item) || {};
+  try{ reqCtx().packBook = null; }catch(e){}
+  const where = sp ? "the “" + sp.name + "” pack" : "your Personal pack";
+  return (it.created === false ? "🔄 Updated “" : "📌 Added “") + (it.title || item.title) + "” in " + where
+    + " — " + (item.nature === "file" ? "a " + String(item.mime).split("/").pop().toUpperCase() + " of " + Math.max(1, Math.round((bytes || 0) / 1024)) + " KB" : item.body.length + " characters")
+    + ", from " + item.source + ".\n"
+    + (it.created === false ? "Same source, same item: nothing was duplicated. " : "Pushing this source again updates it. ")
+    + "Every card prompt of " + (sp ? "this space" : "your Personal space") + " now carries it" + (item.pin ? " (pinned: always)" : " when it fits the card") + ".";
+}
+
+// 🖥 Le runner dit au COMPTE qu'il tourne (0077) : l'app en fait le défaut du toucher 🪁 (« Run on my Mac »). Le NOM du dossier
+// seulement, jamais son chemin. Jamais bloquant : une base sans la 0077, un réseau absent, et le runner continue.
+async function runnerAccountBeat(on, cfg){
+  if(!CLOUD || !API_KEY_OK) return false;
+  try{ await cloudCall("runner_beat", { on: on === true, name: basename(String((cfg && cfg.folder) || "")).slice(0, 60) }); return true; }
+  catch(e){ return false; }
+}
 async function runnerTool(a){
   const act = String((a && a.action) || "status").trim().toLowerCase();
   if(HOSTED) throw new Error("The Mac runner runs on your own Mac: use it from the TabTree plugin in Claude Code.");
@@ -7400,6 +7635,7 @@ async function runnerTool(a){
     try{ rmSync(runnerPlistPath(), { force: true }); }catch(e){}
     if(!runnerNoLaunchd()) try{ execFileSync("/usr/bin/security", ["delete-generic-password", "-s", RUNNER_KC, "-a", "runner"], { stdio: "ignore", timeout: 8000 }); }catch(e){}
     runnerWrite("config.json", Object.assign({}, cfg, { on: false }));
+    await runnerAccountBeat(false, cfg);
     const pend = runnerOutbox().items.filter(x => !x.sent).length;
     return "⏹ The Mac runner is off. No card will start on this Mac, and no approved draft will be sent from it."
       + (pend ? "\n" + pend + " e-mail draft(s) were still waiting for your approval: they stay in Gmail — send them from there." : "");
@@ -7426,6 +7662,7 @@ async function runnerTool(a){
     writeFileSync(runnerPlistPath(), runnerPlist(process.execPath, copy, env));
     runnerLaunchctl(["bootout", "gui/" + runnerUid() + "/" + RUNNER_LABEL]);
     if(!runnerLaunchctl(["bootstrap", "gui/" + runnerUid(), runnerPlistPath()])) throw new Error("macOS refused to load the runner (launchctl bootstrap). The file is at " + runnerPlistPath() + ".");
+    await runnerAccountBeat(true, runnerConfig());
     let preview = "";
     try{ preview = runnerPreviewText(await runnerPreview(runnerConfig())); }catch(e){ preview = "(Could not read your boards just now: " + projLine(e && e.message || e, 160) + ")"; }
     return "✅ The Mac runner is on. Every 10 minutes, while this Mac is awake and you are logged in, it looks at your TabTree boards.\n"
