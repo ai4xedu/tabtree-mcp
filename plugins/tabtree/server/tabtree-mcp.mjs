@@ -1482,9 +1482,21 @@ async function cloudLibrary(){
       mtime: String(r.updated_at || "").slice(0,16).replace("T"," "),
       updatedAt: String(r.updated_at || ""),
       spaceKey: r.space_key || (r.folder_key ? rootSpaceOf(owner, r.folder_key) : null),
+      // 🗂 L'onglet de DOCUMENT (0080) : l'id (celui de l'app) de son classeur, lu par le serveur dans `profiles.settings.subs`.
+      // Un serveur d'avant la 0080 ne le rend pas : tout reste visible, comme avant.
+      sub: typeof r.sub === "string" && /^[A-Za-z0-9_]{1,64}$/.test(r.sub) ? r.sub : null,
+      tabOf: null,
       doc
     });
   }
+  // Un `sub` qui ne désigne aucun document de la liste (ou lui-même) n'est l'onglet de rien : il reste une carte visible —
+  // la réparation de `subsNormalize`, côté app. Sinon la ligne dit de quel classeur il est l'onglet, comme en mode dossier.
+  const byFile = new Map(out.map(m=>[m.file, m]));
+  for(const m of out){
+    const book = m.sub && m.sub !== m.file ? byFile.get(m.sub) : null;
+    if(book) m.tabOf = book.name || book.file; else m.sub = null;
+  }
+  spaceTabsMark(out, reqCtx().spaces, me);
   return out;
 }
 async function loadLibrary(){ return CLOUD ? cloudLibrary() : scanLibrary(); }
@@ -1964,12 +1976,40 @@ async function writeDoc(name, doc, folder, opts){
                                   .sort((a,b)=>((a.owner === me ? 0 : 1) - (b.owner === me ? 0 : 1)) || (chain(a).length - chain(b).length));
       if(hits.length){ f0 = hits[0]; folder_twins = hits.length; }
     }
-    const owner = f0 ? (f0.owner || me) : (sp ? sp.owner : me);
+    // 🗂 `tab_of` (1.36.0, lot 3 des onglets d'espace) : le document naît ONGLET CACHÉ d'un autre — absent de la bibliothèque,
+    // ouvert depuis la bande d'onglets de son classeur, rangé là où vit son classeur (`folder` et `space` sont alors ignorés, et la
+    // réponse le dit). Le serveur écrit `profiles.settings.subs` (migration 0081) et refuse un espace partagé : `sub` est un réglage
+    // PERSONNEL, les coéquipiers verraient toujours le document dans leur bibliothèque.
+    let book = null;
+    if(o.tabOf != null && o.tabOf !== ""){
+      if(typeof o.tabOf !== "string") throw new Error("`tab_of` must be a string: the file id, or the exact name, of the document this one becomes a tab of.");
+      const want = o.tabOf.trim();
+      const rows = (j.maps || []).filter(m=>m && m.map_key);
+      const idOf = m=>(m.owner && me && m.owner !== me) ? teamLocalId(m.owner, m.map_key) : m.map_key;
+      let hits = rows.filter(m=>idOf(m) === want || m.map_key === want);
+      if(!hits.length) hits = rows.filter(m=>norm(m.name) === norm(want));
+      if(!hits.length) throw new Error("No map “" + want + "” to make this a tab of. `tab_of` takes a file id or an exact map name — use list_maps.");
+      if(hits.length > 1) throw new Error(hits.length + " maps are named “" + want + "”: pass the `file:` id of the one you mean (list_maps shows it).");
+      book = hits[0];
+      // Jamais un onglet d'onglet : le classeur d'un onglet est SON classeur.
+      if(typeof book.sub === "string" && book.sub){ const up = rows.find(m=>idOf(m) === book.sub); if(up) book = up; }
+      if(book.owner && me && book.owner !== me)
+        throw new Error("“" + book.name + "” lives in a team space, and a tab is personal for now: your teammates would still see it as a separate document. Create a normal map there instead (omit `tab_of`, pass `space`).");
+    }
+    const owner = book ? me : (f0 ? (f0.owner || me) : (sp ? sp.owner : me));
     const kind = o.kind || (doc.board ? "board" : (doc.kanban ? "kanban" : "map"));
-    const body = { name: String(name||"").slice(0,200), kind, doc, folder_key: f0 ? f0.folder_key : null };
+    const body = { name: String(name||"").slice(0,200), kind, doc, folder_key: book ? (book.folder_key || null) : (f0 ? f0.folder_key : null) };
     if(owner && me && owner !== me) body.owner = owner;
-    if(!f0 && sp) body.space_key = sp.space_key;
+    if(book){ body.tab_of = book.map_key; if(!book.folder_key && book.space_key) body.space_key = book.space_key; }
+    else if(!f0 && sp) body.space_key = sp.space_key;
     const r = await cloudCall("create", body);
+    if(book){
+      const idB = r.map_key;
+      const tabNote = "  (a tab of “" + book.name + "” — hidden from the library: the user opens it from the tab strip of “" + book.name + "”"
+        + ((folder || o.space) ? "; `folder` and `space` were ignored, a tab lives where its document lives" : "") + ")";
+      if(o.info) return { text: "cloud:" + idB + tabNote, key: idB, owner: me, id: idB, team: false };
+      return "cloud:" + idB + tabNote;
+    }
     // On DIT toujours où la carte a atterri : l'espace, le chemin complet — pas le nom demandé.
     const spaceOf = (own, key)=>{ const x = spaces.find(y=>y.owner === own && y.space_key === key); return x ? x.name : null; };
     const inSpace = f0 ? spaceOf(f0.owner, f0.space_key) : (sp ? sp.name : null);
@@ -1990,6 +2030,8 @@ async function writeDoc(name, doc, folder, opts){
     if(o.info) return { text: "cloud:" + (id || r.map_key) + where, key: r.map_key, owner, id: id || r.map_key, team: !!(owner && me && owner !== me) };
     return "cloud:" + (id || r.map_key) + where;
   }
+  // En mode dossier l'index de la bibliothèque (le manifeste) est écrit par l'APP : le connecteur ne peut pas y marquer un onglet.
+  if(o.tabOf != null && o.tabOf !== "") throw new Error("`tab_of` needs a TabTree account (the connector's cloud mode): in folder mode the library index is written by the app, so a tab cannot be created from here. Omit `tab_of` to create a normal map.");
   dirOk();
   let target = DIR;
   if(folder){
@@ -2720,6 +2762,56 @@ function kbColNorm(s){
     return String(s || "").normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   }
 function kbColKin(s){ const v = kbColNorm(s); return KB_COL_KIN.findIndex(l => l.indexOf(v) >= 0); }
+// ---------------------------------------------------------------------------
+// 🗂 LES ONGLETS D'UN ESPACE, lot 1 (2026-11-15) — la SECONDE copie de la classification de l'app
+// (src/js/1396-space-tabs.js, spec docs/superpowers/specs/2026-11-15-space-tabs-design.md § 5.7).
+//
+// `list_maps` doit dire la vérité de l'écran : un document d'un espace nommé y porte son onglet d'espace
+// (Sprint · Projects · Thinking · CRM · Knowledge), et un onglet de DOCUMENT (caché dans son classeur) y est marqué
+// « ↳ tab of » en mode compte comme en mode dossier.
+//
+// Les cinq déclarations ci-dessous sont COPIÉES de l'app, mot pour mot (le test les compare : ST_HEADS). Ce que le
+// connecteur ne copie PAS, et c'est une dette NOMMÉE : il ne lit pas le tableau pour trouver son CRM. Il ne connaît que la
+// règle du NOM (`kbCrmTabName` : un onglet kanban du tableau nommé « CRM » ou « … — CRM ») ; un CRM lié par un nœud
+// « 🤝 CRM » sous un autre nom lui échappe. Et la marque `know` (un réglage personnel) ne lui arrive pas : la carte de
+// connaissance se reconnaît à son nom, la plus récente — le repli de `kbKnowMapId`.
+function homeKind(m){ return m.kind === "board" ? "board" : m.kind === "note" ? "note"
+                            : m.kind === "kanban" ? "kanban" : m.kind === "gantt" ? "gantt"
+                            : m.kind === "sheet" ? "sheet" : "map"; }
+function spaceTabOf(m, ctx){
+    if(!m) return null;
+    const c = ctx || {};
+    if(c.mainId && m.id === c.mainId) return "sprint";
+    if(c.crmId && m.id === c.crmId) return "crm";
+    if(m.sub) return null;
+    if(c.knowId && m.id === c.knowId) return "know";
+    const k = homeKind(m);
+    return (k === "kanban" || k === "gantt") ? "projects" : "thinking";
+  }
+const KB_CRM_NAMES = ["crm", "sales", "ventes", "pipeline", "commercial"];
+function kbCrmName(s){ return KB_CRM_NAMES.indexOf(kbColNorm(s)) >= 0; }
+function kbCrmTabName(s){ const t = String(s || ""); return kbCrmName(t) || kbCrmName(t.split(/\s[—–-]\s/).pop()); }
+const SPACE_TAB_NAME = { sprint:"Sprint", crm:"CRM", know:"Knowledge", projects:"Projects", thinking:"Thinking" };
+// Pose `spaceTab` sur chaque document d'un espace NOMMÉ, et `board` (le nom de son tableau) sur chaque espace qui en a un.
+// `lib` : les entrées de `cloudLibrary` (id = `file`, l'id que l'app donne à la carte). Personal n'a pas d'onglets.
+function spaceTabsMark(lib, spaces, me){
+  for(const sp of (spaces || [])){
+    if(!sp || !sp.space_key) continue;
+    const inSp = lib.filter(m=>m.owner === sp.owner && m.spaceKey === sp.space_key);
+    delete sp.board;
+    if(!inSp.length) continue;
+    // Le tableau : la clé du propriétaire devient l'id de l'app (≡ `teamSpaceMainId`), et il doit être un kanban VISIBLE de l'espace.
+    const mainFile = typeof sp.main_key === "string" && sp.main_key ? (sp.owner === me ? sp.main_key : teamLocalId(sp.owner, sp.main_key)) : null;
+    const main = mainFile ? inSp.find(m=>m.file === mainFile && !m.sub && homeKind(m) === "kanban") : null;
+    const crm = main ? lib.find(m=>m.sub === main.file && homeKind(m) === "kanban" && kbCrmTabName(m.name)) : null;
+    const know = inSp.filter(m=>(m.kind === "map" || m.kind === "note") && hvSame(m.name, KNOW_NAME))
+      .sort((a, b)=>String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] || null;
+    const ctx = { mainId: main ? main.file : null, crmId: crm ? crm.file : null, knowId: know ? know.file : null };
+    for(const m of inSp) m.spaceTab = spaceTabOf({ id: m.file, sub: m.sub, kind: m.kind }, ctx);
+    if(crm && crm.spaceTab === undefined) crm.spaceTab = "crm";   // un CRM rangé hors de l'espace reste le CRM de son tableau
+    if(main) sp.board = main.name;
+  }
+}
 const KB_KIN_BACKLOG = 3;   // la famille « backlog » de KB_COL_KIN : ce qui n'est PAS engagé dans le sprint
 // ≡ les clés de `PROJ_VERDICTS` d'app/index.html (le test compare) : la liste FERMÉE d'un epic.
 const PROJ_VERDICT_KEYS = ["untested","testing","validated","invalidated"];
@@ -3866,6 +3958,10 @@ function cardPromptPlan(n, ctx){
   const set = cardPromptKindById(c.kind);
   const kind = set || cardPromptKindById(det.id);
   const from = set ? "set" : det.from;
+  // 🧪 Le BRAS NU du banc (lot E, migration 0079) : la carte et son contexte, sans le Role ni les garde-fous rédigés par TabTree.
+  // Restent : le contexte, la tâche, le format (le contrat de sortie), et ce que l'ÉQUIPE a écrit (le `Gate:` de la carte, les règles,
+  // les consignes de l'agent). Sans `ctx.variant` : le prompt d'avant, octet pour octet.
+  const bare = c.variant === "bare";
   let stripped = 0;
   const clean = s => { const t = String(s == null ? "" : s).trim(); if(!t) return ""; if(kbSecretLike(t)){ stripped++; return ""; } return t; };
   const one = (s, max) => { const t = clean(s); return t.length > max ? t.slice(0, max - 1) + "…" : t; };
@@ -3970,8 +4066,8 @@ function cardPromptPlan(n, ctx){
   // --- Guardrails ---
   const gateA = attrsOf(n).find(a => a.name.toLowerCase() === CARD_PROMPT_GATE_ATTR.toLowerCase());
   const gate = gateA ? one(gateA.val, 300) : "";
-  const gd = (gate ? [W.gate(gate)] : []).concat(W.guards).map((g, i) => (i + 1) + ". " + g);
-  if(n.due) gd.push((gd.length + 1) + ". " + W.dueBy(n.due));
+  const gd = (gate ? [W.gate(gate)] : []).concat(bare ? [] : W.guards).map((g, i) => (i + 1) + ". " + g);
+  if(n.due && !bare) gd.push((gd.length + 1) + ". " + W.dueBy(n.due));
   // 📖 Les passages des autres cartes, sous leur propre budget ; chaque ligne passe le filtre des secrets.
   const pas = (Array.isArray(c.passages) ? c.passages : []).filter(p => !(lt && p && p.path === "📖 " + c.link.name));
   if(pas.length){
@@ -3986,11 +4082,11 @@ function cardPromptPlan(n, ctx){
       used += cut.length;
     }
   }
-  if(kn.length || pas.length) gd.push((gd.length + 1) + ". " + W.knowGuard);
-  if(pk.length) gd.push((gd.length + 1) + ". " + W.packGuard);
+  if(!bare && (kn.length || pas.length)) gd.push((gd.length + 1) + ". " + W.knowGuard);
+  if(pk.length && !bare) gd.push((gd.length + 1) + ". " + W.packGuard);
   const rules = (c.rules || []).map(r => ({ t: one(r && r.t, 300), from: r && r.from })).filter(r => r.t);
   if(rules.length){
-    gd.push(""); gd.push(W.rules);
+    if(gd.length) gd.push(""); gd.push(W.rules);
     gd.push(...cardPromptCap(rules.map((r, i) => (i + 1) + ". " + (W.ruleFrom[r.from] ? "[" + W.ruleFrom[r.from] + "] " : "") + r.t), 1500, W.more));
   }
   // --- Format ---
@@ -4006,18 +4102,16 @@ function cardPromptPlan(n, ctx){
   if(agName){
     const ins = String(ag.instructions || "").split("\n").filter(l => { if(l.trim() && kbSecretLike(l)){ stripped++; return false; } return true; }).join("\n").trim();
     const insOk = cardPromptNoMail(ins);
-    if(insOk){ agLines.push(insOk.length > 4000 ? insOk.slice(0, 3999) + "…\n" + W.cut : insOk); agLines.push(""); agLines.push(W.agentGuard); }
+    if(insOk){ agLines.push(insOk.length > 4000 ? insOk.slice(0, 3999) + "…\n" + W.cut : insOk); if(!bare){ agLines.push(""); agLines.push(W.agentGuard); } }
   }
-  const sections = [
-    { key:"role", title:W.role, lines:roleLines },
+  const sections = (bare ? [] : [{ key:"role", title:W.role, lines:roleLines }]).concat([
     { key:"context", title:W.context, lines:cx.length ? cx : ["—"] },
-    { key:"task", title:W.task, lines:tk },
-    { key:"guard", title:W.guard, lines:gd }
-  ].concat(agLines.length ? [{ key:"agent", title:W.agent, lines:agLines }] : [], [
+    { key:"task", title:W.task, lines:tk }
+  ], gd.length ? [{ key:"guard", title:W.guard, lines:gd }] : [], agLines.length ? [{ key:"agent", title:W.agent, lines:agLines }] : [], [
     { key:"format", title:W.format, lines:fm }
   ]);
   const text = sections.map(s => "## " + s.title + "\n" + s.lines.join("\n")).join("\n\n");
-  return { kind: kind.id, from, sections, text: text.length > CARD_PROMPT_MAX ? text.slice(0, CARD_PROMPT_MAX - 1) + "…" : text, stripped };
+  return { kind: kind.id, from, sections, text: text.length > CARD_PROMPT_MAX ? text.slice(0, CARD_PROMPT_MAX - 1) + "…" : text, stripped, variant: bare ? "bare" : "" };
 }
 // 🎯 LA RÈGLE « PRÊTE POUR UN AGENT » (Coach Claude, lot 1, 2026-11-08, docs/superpowers/specs/2026-11-08-claude-coach-design.md § 5).
 // PURE. Rend la liste ORDONNÉE des manques d'une carte avant de la confier à un agent ; vide = prête. `o.from` est
@@ -5040,7 +5134,9 @@ function dispatchText(m, plan){
 const TOOLS = [
   {
     name: "list_maps",
-    description: "Lists every mind map, kanban, note and board in the TabTree library — the user's own and those of the team spaces they belong to (name, type, space, folder, size, last modified).",
+    description: "Lists every mind map, kanban, note and board in the TabTree library — the user's own and those of the team spaces they belong to (name, type, space, folder, size, last modified). "
+      + "A line marked “↳ tab of “X”” is a hidden TAB of the document X: it is not listed in the user's library, they reach it from X. "
+      + "In a named space, “🗂” gives the document's SPACE TAB, as the user sees it: Sprint (the space's one sprint board — the “Spaces:” line names it), CRM and Knowledge (one document each), Projects (the other kanbans and plans) or Thinking (maps, pages, sheets, whiteboards).",
     inputSchema: { type:"object", properties:{}, additionalProperties:false }
   },
   {
@@ -5092,6 +5188,7 @@ const TOOLS = [
       }, required:["name"], additionalProperties:false } },
       markdown:{ type:"string", description:"Markdown outline (headings and/or bullet list). End any line with \" @a:<id>\" to give that node a built-in illustration, or \" @e:<emoji>\" for one large emoji — e.g. \"Launch @a:rocket\". Ids: person, team, chat, idea, target, trophy, star, heart, warning, done, flag, clock, laptop, phone, mail, folder, book, chart, money, calendar, building, car, globe, rocket, house, pin, plane, coffee, plant, sun, camera, music, lock, key, health, gift. An unknown id is left as plain text rather than dropped." },
       folder:{ type:"string", description:"Optional TabTree folder. A NAME (\"From Claude\") or a full PATH (\"Ai4X / Programmes\"). When several folders share a name, the shallowest is used and the answer says which — pass the full path to choose another." },
+      tab_of:{ type:"string", description:"Optional. Makes the new document a hidden TAB of an existing one — pass that document's file id, or its exact name (list_maps). A tab is not listed in the user's library: they open it from the tab strip of that document, and it lives in the same folder and space (`folder` and `space` are then ignored). Use it for the annexes of a project — phases, notes, a second board — instead of one more document in the library. Needs the account (cloud) mode; refused in a team space, where a tab would still show as a separate document to teammates." },
       space:{ type:"string", description:"Optional TabTree SPACE to put it in, by name — one of the user's spaces, or a TEAM space they are an editor of (every member then sees it). list_maps shows the spaces. Omit for the user's own library." },
       view:{ type:"string", enum:["map","note","gantt"], description:"How TabTree opens it: map (default, a mind map), note (a page of text — the outline becomes headings and paragraphs, for meeting notes or a document), gantt (a timeline — give `dates`). It stays one document: the user can switch views at any time." },
       dates:{ type:"array", description:"Optional start/due days on nodes — what the Gantt view draws (and what the kanban and calendar show). One entry per node.", items:{ type:"object", properties:{
@@ -5174,6 +5271,7 @@ const TOOLS = [
         from:{ type:"string" }, to:{ type:"string" }
       }, required:["from","to"], additionalProperties:false } },
       folder:{ type:"string", description:"Optional TabTree folder. A NAME or a full PATH (\"Ai4X / Programmes\"). When several folders share a name, the shallowest is used and the answer says which." },
+      tab_of:{ type:"string", description:"Optional. Makes the new document a hidden TAB of an existing one — pass that document's file id, or its exact name (list_maps). A tab is not listed in the user's library: they open it from the tab strip of that document, and it lives in the same folder and space (`folder` and `space` are then ignored). Use it for the annexes of a project — phases, notes, a second board — instead of one more document in the library. Needs the account (cloud) mode; refused in a team space, where a tab would still show as a separate document to teammates." },
       space:{ type:"string", description:"Optional TabTree SPACE to put it in, by name — one of the user's spaces, or a TEAM space they are an editor of (every member then sees it). list_maps shows the spaces. Omit for the user's own library." },
       style:{ type:"object", description:"Optional look of the document. Omit it for the default.", properties:{
         font:{ type:"string", enum:["","grotesk","humanist","condensed","rounded","serif","garamond","didone","slab","typewriter","mono","hand"], description:"Type family: grotesk (corporate), humanist (warm), condensed (dense), rounded (friendly), serif/garamond (editorial), didone (elegant), slab (sturdy), typewriter, mono (technical), hand (handwritten)." },
@@ -5212,6 +5310,7 @@ const TOOLS = [
       labels:{ type:"object", description:"Optional names for the colour labels, e.g. { \"red\": \"Bug\", \"green\": \"Quick win\" }", additionalProperties:{ type:"string" } },
       format:{ type:"string", enum: FORMATS_MCP, description:"Optional living format of the underlying map (the same list as create_mindmap). A flat board rarely needs one: for a PROJECT — objectives, epics with Hypothesis / Goal / Signal / Verdict, then cards — use create_mindmap with format \"projet\" and `columns`, which keeps the cards under their epics." },
       folder:{ type:"string", description:"Optional folder, by NAME or full PATH." },
+      tab_of:{ type:"string", description:"Optional. Makes the new document a hidden TAB of an existing one — pass that document's file id, or its exact name (list_maps). A tab is not listed in the user's library: they open it from the tab strip of that document, and it lives in the same folder and space (`folder` and `space` are then ignored). Use it for the annexes of a project — phases, notes, a second board — instead of one more document in the library. Needs the account (cloud) mode; refused in a team space, where a tab would still show as a separate document to teammates." },
       space:{ type:"string", description:"Optional TabTree SPACE to put it in, by name — one of the user's spaces, or a TEAM space they are an editor of (every member then sees it). list_maps shows the spaces. Omit for the user's own library." },
       style:{ type:"object", description:"Optional look (same keys as create_mindmap: font, background, skin…).", additionalProperties:true }
     }, required:["name"], additionalProperties:false }
@@ -5471,12 +5570,13 @@ const HANDLERS = {
     const maps = await loadLibrary();
     if(!maps.length) return CLOUD ? "This TabTree account has no maps yet." : "The library is empty (or TABTREE_DIR points at the wrong folder: " + DIR + ").";
     const lines = maps.map(m=>
-      `• ${m.name}  [${m.kind}]${m.space ? "  " + (m.team ? "👥 " : "◻︎ ") + m.space + (m.team ? " (" + m.role + ")" : "") : ""}${m.folder ? "  📁 " + m.folder : ""}${m.tabOf ? "  ↳ tab of “" + m.tabOf + "”" : ""}\n  file: ${m.file}\n  ${m.kind==="board" ? m.elements + " elements" : m.nodes + " nodes"} · modified ${m.mtime}`
+      `• ${m.name}  [${m.kind}]${m.space ? "  " + (m.team ? "👥 " : "◻︎ ") + m.space + (m.team ? " (" + m.role + ")" : "") : ""}${m.folder ? "  📁 " + m.folder : ""}${m.tabOf ? "  ↳ tab of “" + m.tabOf + "”" : ""}${m.spaceTab ? "  🗂 " + SPACE_TAB_NAME[m.spaceTab] : ""}\n  file: ${m.file}\n  ${m.kind==="board" ? m.elements + " elements" : m.nodes + " nodes"} · modified ${m.mtime}`
     );
     // Les espaces où Claude peut créer (`space` des outils de création) — y compris ceux qui sont VIDES,
     // qu'aucune carte ne ferait apparaître dans la liste.
     const sps = CLOUD && reqCtx().spaces && reqCtx().spaces.length
-      ? "\n\nSpaces: " + reqCtx().spaces.map(x=>"“" + x.name + "”" + (x.role !== "owner" ? " (team, " + x.role + (x.writable ? "" : ", read-only") + ")" : "")).join(", ")
+      ? "\n\nSpaces: " + reqCtx().spaces.map(x=>"“" + x.name + "”" + (x.role !== "owner" ? " (team, " + x.role + (x.writable ? "" : ", read-only") + ")" : "")
+          + (x.board ? " — sprint board: “" + x.board + "”" : "")).join(", ")
       : "";
     return lines.join("\n") + sps;
   },
@@ -5583,7 +5683,7 @@ const HANDLERS = {
     const warn = [];
     if(roles && !roles.root) warn.push("⚠️ None of the project's branches were recognised — the 🗂 Project format reads first-level branches by their leading emoji: “🎯 Objectives”, “🧱 Epics”, “📚 Knowledge”, “📝 Decisions”. Recreate the map with those headings.");
     if(roles && roles.epics && !cols) warn.push("ℹ️ No `columns` were given, so the epics' cards are not on a kanban yet. Add them with propose_changes { op: \"columns\", columns: [{ name: \"Backlog\" }, { name: \"To do\" }, { name: \"Doing\" }, { name: \"Done\", done: true }] }, then `move` the cards.");
-    const file = await writeDoc(args.name || root.text, doc, args.folder, { kind: view, space: args.space });
+    const file = await writeDoc(args.name || root.text, doc, args.folder, { kind: view, space: args.space, tabOf: args.tab_of });
     const shotLines = shots.length ? `\n📷 ${shots.length} screenshot(s) on the map:\n` + shots.map(x=>"   • " + x).join("\n") + "\n" : "";
     const label = format === "projet" ? "Project" : view === "note" ? "Note" : view === "gantt" ? "Gantt" : "Map";
     const proj = roles && roles.root
@@ -5639,7 +5739,7 @@ const HANDLERS = {
   async create_board(args){
     const elements = await resolveImageUrls(args.elements, "elements", e=>e.kind === "image");
     const { doc, warnings, imageNotes } = buildBoardDoc(args.name || "Board", elements, args.connections, args.style);
-    const file = await writeDoc(args.name || "Board", doc, args.folder, { space: args.space });
+    const file = await writeDoc(args.name || "Board", doc, args.folder, { space: args.space, tabOf: args.tab_of });
     const n = doc.shapes.length + doc.stickies.length + doc.images.length;
     const imgs = imageNotes.length ? `🖼  ${imageNotes.length} image(s):\n` + imageNotes.map(t=>"   • " + t).join("\n") + "\n" : "";
     // Les avertissements passent AVANT l'astuce d'import : c'est le seul moment où le texte
@@ -5655,7 +5755,7 @@ const HANDLERS = {
   async create_kanban(args){
     if(typeof args.name !== "string" || !args.name.trim()) throw new Error("The `name` parameter is required (the board's name).");
     const doc = buildKanbanDoc(args);
-    const file = await writeDoc(args.name, doc, args.folder, { kind: "kanban", space: args.space });
+    const file = await writeDoc(args.name, doc, args.folder, { kind: "kanban", space: args.space, tabOf: args.tab_of });
     const cards = doc.root.children;
     const per = doc.kanban.cols.map(k => k.name + " " + cards.filter(c => k.done ? c.check === true : (c.col === k.id && c.check !== true)).length).join(" · ");
     return `✅ Kanban created — ${cards.length} card(s): ${per}\n${file}\n${importHint()}`
@@ -6220,7 +6320,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.35.0" }
+      serverInfo: { name: "tabtree", version: "1.36.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
