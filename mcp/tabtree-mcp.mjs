@@ -25,7 +25,7 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, realpathSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
@@ -5545,7 +5545,11 @@ const TOOLS = [
                                cc:{ type:"array", items:{ type:"string" }, description:"Its Cc addresses, if any." },
                                bcc:{ type:"array", items:{ type:"string" }, description:"Its Bcc addresses, if any." },
                                subject:{ type:"string", description:"The draft's subject." } },
-                  required:["draft_id","to","subject"], additionalProperties:false }
+                  required:["draft_id","to","subject"], additionalProperties:false },
+      action:   { type:"object", description:"Only when the card asks for something another person will receive through a connector, and TabTree's Mac runner is on. You never do it yourself: describe it here, the user approves it in TabTree, and only then does the Mac runner carry out EXACTLY this input, once. One action per delivery. kind \"calendar.create_event\": input = { summary, startTime, endTime (local, like 2026-04-30T10:00:00, no offset), attendees: [{ email }], description, location, addGoogleMeetUrl, allDay, timeZone (only when named), notificationLevel }. The card shows a line written by TabTree from this input (title, day, time, number of guests) — never an address.",
+                  properties:{ kind:{ type:"string", description:"The action kind, e.g. \"calendar.create_event\"." },
+                               input:{ type:"object", description:"The exact input of the connector's tool, limited to the fields listed above." } },
+                  required:["kind","input"], additionalProperties:false }
     }, required:["file","card","result"], additionalProperties:false }
   }
   ,{
@@ -6251,6 +6255,13 @@ const HANDLERS = {
       if(!runnerConfig().on) throw new Error("TabTree's Mac runner is off, so nothing would send this draft after approval. Turn it on with /tabtree:runner on <folder>, or deliver without email and tell the user the draft is waiting in Gmail.");
       mail = runnerEmailClean(a.email);
     }
+    // ⏳ Une action retenue (un événement d'agenda…) : même règle que le courriel — c'est le Mac runner qui l'exécute après l'accord.
+    let act = null;
+    if(a.action != null){
+      if(HOSTED || !CLOUD) throw new Error("A held action can only be approved and carried out through TabTree's Mac runner (the TabTree plugin in Claude Code, on a Mac). Deliver without action, and write in the result what the user should do by hand.");
+      if(!runnerConfig().on) throw new Error("TabTree's Mac runner is off, so nothing would carry this action out after approval. Turn it on with /tabtree:runner on <folder>, or deliver without action and write in the result what the user should do by hand.");
+      act = Object.assign(runnerActionClean(a.action), { id: runnerActNewId() });
+    }
     const { m, card } = await cpMapAndCard(a, true);
     let secrets = 0;
     const result = a.result.replace(/\r/g, "").split("\n").filter(l=>{ if(kbSecretLike(l)){ secrets++; return false; } return true; }).join("\n").trim();
@@ -6293,6 +6304,8 @@ const HANDLERS = {
       // ✉️ Le brouillon s'accroche à la PREMIÈRE entrée : accepter la livraison, c'est accepter l'envoi (le runner le lit là).
       if(i === 0 && mail) ops.push({ op:"attr", node: nid, target: (card.path + " > " + text).slice(0, 600), name: RUNNER_EMAIL_ATTR, value: runnerEmailValue(mail),
         why: "Accept to send this Gmail draft to " + mail.n + " recipient" + (mail.n === 1 ? "" : "s") });
+      if(i === 0 && act) ops.push({ op:"attr", node: nid, target: (card.path + " > " + text).slice(0, 600), name: RUNNER_ACT_ATTR, value: runnerActValue(act),
+        why: "Accept to " + RUNNER_ACTIONS[act.kind].accept });
     });
     // Sans `text` : chez l'app, le `text` d'un ajout REMPLACE la première ligne et retire sa case (`propApplyOps`) — la première
     // sous-tâche serait arrivée sans case à cocher (vu par l'autotest de l'app).
@@ -6306,6 +6319,12 @@ const HANDLERS = {
       box.items = box.items.filter(x => x.draft !== mail.draft).concat([{ draft: mail.draft, file: m.file, card: String(card.node.id || ""),
         to: mail.to, cc: mail.cc, bcc: mail.bcc, subject: mail.subject, n: mail.n, at: new Date().toISOString(), tries: 0, gone: 0 }]);
       runnerWrite("outbox.json", box);
+    }
+    // ⏳ Ce Mac retient l'entrée EXACTE de l'action (jamais la carte) : c'est contre elle que le garde compare l'appel.
+    if(act){
+      const box = runnerActions();
+      box.items = box.items.concat([{ id: act.id, kind: act.kind, input: act.input, line: act.line, file: m.file, card: String(card.node.id || ""), at: new Date().toISOString(), tries: 0, gone: 0 }]);
+      runnerWrite("actions.json", box);
     }
     // 🌅 Une carte programmée (`Agent run`) et confiée à Claude reçoit `Agent ran` SANS clic, À CÔTÉ du livrable qui attend la
     // revue : l'exécuteur du lendemain ne la reprend pas (et tant que l'app n'a pas appliqué la marque, la livraison en attente
@@ -6329,6 +6348,7 @@ const HANDLERS = {
       + (col ? "   • the card moves to “" + col.name + "”" + (byDefault ? " (the board's review column: a human validates it and moves it to Done)" : "") + "\n" : "")
       + ranMark
       + (mail ? "   • ✉️ Accept to send “" + mail.subject + "” → " + mail.n + " recipient" + (mail.n === 1 ? "" : "s") + " (the Mac runner sends that very Gmail draft about a minute after the approval; reject and nothing is sent)\n" : "")
+      + (act ? "   • " + RUNNER_ACTIONS[act.kind].ico + " Accept to " + RUNNER_ACTIONS[act.kind].accept + ": " + act.line + " (the Mac runner does exactly that about a minute after the approval; reject and nothing happens)\n" : "")
       + (secrets ? "🔒 " + secrets + " line(s) looked like a password, key or token and were left out.\n" : "")
       + "NOTHING is on the card yet. TabTree shows a banner on that map" + (CLOUD ? " within a minute (app open, signed in)" : " (backup folder connected, app open)") + ": the user reviews it and applies it in one click; Cmd+Z undoes it.\n"
       + "Tell the user it is waiting for their approval in TabTree — do not claim it is on the card.";
@@ -6357,7 +6377,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.38.0" }
+      serverInfo: { name: "tabtree", version: "1.39.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
@@ -7183,6 +7203,200 @@ function runnerEmailValue(c){ return c.draft + " · “" + c.subject + "” · "
 function runnerEmailIdOf(val){ return String(val == null ? "" : val).split("·")[0].trim(); }
 
 // ---------------------------------------------------------------------------
+// ⏳ LES ACTIONS RETENUES (1.39.0, 2026-11-16) — un connecteur écrit APRÈS l'accord, jamais avant
+// ---------------------------------------------------------------------------
+// Demande du propriétaire : « envoyer des invitations d'agenda depuis TabTree… en général, faire marcher les connecteurs ».
+// La passe d'une carte peut LIRE un connecteur, jamais y écrire ce qu'une autre personne recevra (`RUNNER_DENY`). Le courriel
+// avait sa voie (un brouillon Gmail, puis l'envoi après accord). Ici la même voie pour TOUT outil d'écriture d'un connecteur :
+//  • la passe PROPOSE l'action à deliver_card (`action: { kind, input }`) — une sorte de la table `RUNNER_ACTIONS`, et rien
+//    d'autre : un outil d'écriture s'allume UN PAR UN, par une entrée de cette table, avec SA frontière (`clean`).
+//  • ⚠️ CE QUE LA CARTE DIT EST ÉCRIT PAR LE RUNNER, depuis les vraies entrées (`line`), jamais par le modèle : ce qu'on accepte
+//    est ce qui part. Jamais une adresse sur la carte (elle peut être lue par une équipe) : les entrées restent sur ce Mac
+//    (`actions.json`).
+//  • Accepter la livraison écrit l'attribut « Held action » sur l'entrée 📄 ; le runner le lit et lance UNE passe qui n'a qu'UN
+//    outil, derrière un GARDE (`--runner-gate`, un hook PreToolUse) : l'appel exact passe UNE fois, tout le reste est refusé
+//    AVANT de s'exécuter. Mesuré contre le vrai `claude` 2.1.319 (un faux agenda) : l'appel exact passe, un autre est bloqué.
+//  • ⚠️ JAMAIS DEUX FOIS : le garde marque `fired` AVANT de laisser passer. Une passe qui meurt après (veille, délai) ne se
+//    rejoue pas — créer deux fois une invitation est pire que de dire « regarde ton agenda ».
+const RUNNER_ACT_ATTR = "Held action", RUNNER_ACT_DONE_ATTR = "Action done";
+const RUNNER_ACT_ID_RE = /^a[a-z0-9]{10}$/;
+const RUNNER_ACT_MS = 5 * 60 * 1000;
+const RUNNER_CAL = "mcp__claude_ai_Google_Calendar__";
+const RUNNER_CAL_KEYS = ["summary", "startTime", "endTime", "allDay", "timeZone", "attendees", "description", "location", "addGoogleMeetUrl", "notificationLevel"];
+const RUNNER_CAL_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+const RUNNER_CAL_TZ_RE = /^(UTC|[A-Za-z_]{2,20}(\/[A-Za-z0-9_+-]{1,30}){1,2})$/;
+const RUNNER_CAL_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const RUNNER_CAL_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// PURE. « 2026-11-20T10:00 » → ses parties, ou null : un jour qui n'existe pas (le 31 février) n'est pas une date.
+function runnerCalParts(v){
+  const m = RUNNER_CAL_TIME_RE.exec(String(v == null ? "" : v).trim());
+  if(!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], sec = m[6] == null ? 0 : +m[6];
+  const t = Date.UTC(y, mo - 1, d, h, mi, sec), back = new Date(t);
+  if(back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d || h > 23 || mi > 59 || sec > 59) return null;
+  const two = n => (n < 10 ? "0" : "") + n;
+  return { y, mo, d, h, mi, t, iso: m[1] + "-" + m[2] + "-" + m[3] + "T" + two(h) + ":" + two(mi) + ":" + two(sec), wd: back.getUTCDay() };
+}
+// PURE. LA FRONTIÈRE d'un événement d'agenda : seules les clés de `RUNNER_CAL_KEYS`, chacune bornée, dans un ordre FIXE (le
+// garde compare deux formes canoniques). Une clé de plus, une adresse mal formée, une fin avant le début : refusé, rien n'est écrit.
+function runnerCalClean(e){
+  if(!e || typeof e !== "object" || Array.isArray(e)) throw new Error("`action.input` must be an object: { summary, startTime, endTime, … }.");
+  for(const k of Object.keys(e)) if(RUNNER_CAL_KEYS.indexOf(k) < 0)
+    throw new Error("`action.input." + projLine(k, 40) + "` is not supported in a held calendar event" + (k === "attendeeEmails" ? " (use attendees: [{ email }])" : "") + ". Supported: " + RUNNER_CAL_KEYS.join(", ") + ".");
+  const summary = hvLine(e.summary, 200).replace(/[“”]/g, "\"");
+  if(!summary) throw new Error("`action.input.summary` is required — the event's title.");
+  if(kbSecretLike(summary)) throw new Error("`action.input.summary` looks like a password, key or token.");
+  const a = runnerCalParts(e.startTime), b = runnerCalParts(e.endTime);
+  if(!a || !b) throw new Error("`action.input.startTime` and `endTime` must be local times like 2026-04-30T10:00:00 (a real day, no offset, no Z); put a named time zone in timeZone.");
+  if(b.t <= a.t) throw new Error("`action.input.endTime` must be after startTime.");
+  if(b.t - a.t > 31 * 86400000) throw new Error("A held calendar event lasts 31 days at most.");
+  const out = { summary, startTime: a.iso, endTime: b.iso };
+  if(e.allDay != null){ if(typeof e.allDay !== "boolean") throw new Error("`action.input.allDay` must be true or false."); if(e.allDay) out.allDay = true; }
+  if(e.timeZone != null && String(e.timeZone).trim()){
+    const tz = String(e.timeZone).trim();
+    if(!RUNNER_CAL_TZ_RE.test(tz)) throw new Error("`action.input.timeZone` must be an IANA name like Africa/Casablanca.");
+    out.timeZone = tz;
+  }
+  if(e.attendees != null){
+    if(!Array.isArray(e.attendees)) throw new Error("`action.input.attendees` must be a list: [{ email }].");
+    const list = [];
+    for(const x of e.attendees){
+      const o = typeof x === "string" ? { email: x } : x;
+      if(!o || typeof o !== "object" || Array.isArray(o)) throw new Error("`action.input.attendees`: each guest is { email }.");
+      for(const k of Object.keys(o)) if(k !== "email" && k !== "optionalAttendee") throw new Error("`action.input.attendees`: only email and optionalAttendee are supported for a guest.");
+      const mail = String(o.email || "").trim().toLowerCase();
+      if(!RUNNER_MAIL_RE.test(mail)) throw new Error("`action.input.attendees`: “" + projLine(o.email, 80) + "” is not an e-mail address.");
+      if(o.optionalAttendee != null && typeof o.optionalAttendee !== "boolean") throw new Error("`action.input.attendees`: optionalAttendee must be true or false.");
+      if(list.some(g => g.email === mail)) continue;
+      list.push(o.optionalAttendee === true ? { email: mail, optionalAttendee: true } : { email: mail });
+    }
+    if(list.length > 20) throw new Error("`action.input.attendees`: 20 guests at most.");
+    if(list.length) out.attendees = list;
+  }
+  if(e.description != null && String(e.description).trim()){
+    if(typeof e.description !== "string") throw new Error("`action.input.description` must be text.");
+    const d = e.description.replace(/\r/g, "").trim();
+    if(d.length > 4000) throw new Error("`action.input.description` is " + d.length + " characters — 4000 at most.");
+    if(d.split("\n").some(l => kbSecretLike(l))) throw new Error("A line of `action.input.description` looks like a password, key or token. Guests would receive it.");
+    out.description = d;
+  }
+  if(e.location != null && String(e.location).trim()){
+    const l = hvLine(e.location, 300);
+    if(kbSecretLike(l)) throw new Error("`action.input.location` looks like a password, key or token.");
+    out.location = l;
+  }
+  if(e.addGoogleMeetUrl != null){ if(typeof e.addGoogleMeetUrl !== "boolean") throw new Error("`action.input.addGoogleMeetUrl` must be true or false."); if(e.addGoogleMeetUrl) out.addGoogleMeetUrl = true; }
+  if(e.notificationLevel != null && String(e.notificationLevel).trim()){
+    const n = String(e.notificationLevel).trim();
+    if(["NONE", "EXTERNAL_ONLY", "ALL"].indexOf(n) < 0) throw new Error("`action.input.notificationLevel` must be NONE, EXTERNAL_ONLY or ALL.");
+    out.notificationLevel = n;
+  }
+  return out;
+}
+// PURE. Ce que la CARTE dit d'un événement : le titre, le jour, l'heure, COMBIEN d'invités — jamais une adresse, ni la description.
+function runnerCalLine(c){
+  const a = runnerCalParts(c.startTime), b = runnerCalParts(c.endTime);
+  const day = p => RUNNER_CAL_DAYS[p.wd] + " " + p.d + " " + RUNNER_CAL_MONTHS[p.mo - 1] + " " + p.y;
+  const hm = p => (p.h < 10 ? "0" : "") + p.h + ":" + (p.mi < 10 ? "0" : "") + p.mi;
+  const same = a.y === b.y && a.mo === b.mo && a.d === b.d;
+  const when = c.allDay ? (same || b.t - a.t <= 86400000 ? day(a) + ", all day" : day(a) + " → " + day(b) + ", all day")
+    : same ? day(a) + ", " + hm(a) + "–" + hm(b) : day(a) + ", " + hm(a) + " → " + day(b) + ", " + hm(b);
+  const n = (c.attendees || []).length;
+  return "“" + c.summary + "” · " + when + (c.timeZone ? " (" + c.timeZone + ")" : "") + " · " + (n ? n + " guest" + (n === 1 ? "" : "s") : "no guests")
+    + (c.addGoogleMeetUrl ? " · Meet" : "") + (c.notificationLevel === "NONE" ? " · no invitation e-mail" : "");
+}
+// PURE à l'horloge près. Un événement dont la fin est passée (heure de ce Mac) ne se crée plus : l'accord arrive trop tard.
+function runnerCalStale(c, now){
+  const b = runnerCalParts(c.endTime);
+  return !b || new Date(b.y, b.mo - 1, b.d, b.h, b.mi, 0).getTime() < now;
+}
+// LA TABLE. Une sorte = UN outil d'écriture d'un connecteur, sa frontière, sa ligne, les autres écritures du même connecteur
+// refusées pendant la passe. En ajouter une, c'est écrire ces quatre choses — et rien d'autre ne change.
+const RUNNER_ACTIONS = {
+  "calendar.create_event": {
+    tool: RUNNER_CAL + "create_event", deny: ["update_event", "delete_event", "respond_to_event"].map(t => RUNNER_CAL + t),
+    ico: "📅", what: "creating one Google Calendar event", accept: "create this calendar event", done: "Created", undone: "created",
+    clean: runnerCalClean, line: runnerCalLine, stale: runnerCalStale,
+    help: "a meeting to put in the calendar: read the calendar first (list_events, suggest_time) to choose a free slot, then pass "
+      + "action: { kind: \"calendar.create_event\", input: { summary, startTime, endTime, attendees: [{ email }], description, location, addGoogleMeetUrl, timeZone } } "
+      + "— local times like 2026-04-30T10:00:00, no offset; timeZone only when the card names one"
+  }
+};
+function runnerActKind(k){ return typeof k === "string" && Object.prototype.hasOwnProperty.call(RUNNER_ACTIONS, k) ? RUNNER_ACTIONS[k] : null; }
+// PURE. L'action que deliver_card accompagne : `{ kind, input }` → { kind, input (canonique), line }. Tout le reste est refusé.
+function runnerActionClean(a){
+  if(!a || typeof a !== "object" || Array.isArray(a)) throw new Error("`action` must be an object: { kind, input }.");
+  for(const k of Object.keys(a)) if(k !== "kind" && k !== "input") throw new Error("`action` takes only kind and input.");
+  const spec = runnerActKind(a.kind);
+  if(!spec) throw new Error("`action.kind` “" + projLine(a.kind, 60) + "” is not an action TabTree's Mac runner can hold. Known: " + Object.keys(RUNNER_ACTIONS).join(", ") + ".");
+  const input = spec.clean(a.input), line = spec.line(input);
+  if(kbSecretLike(line)) throw new Error("The action's summary looks like a password, key or token. Never put a secret on a card.");
+  return { kind: a.kind, input, line };
+}
+function runnerActNewId(){ let s = "a"; const abc = "abcdefghijklmnopqrstuvwxyz0123456789", b = randomBytes(10); for(let i = 0; i < 10; i++) s += abc[b[i] % 36]; return s; }
+// PURE. La valeur de l'attribut : l'id (la clé), la sorte, puis la ligne écrite par le runner.
+function runnerActValue(c){ return c.id + " · " + c.kind + " · " + c.line; }
+function runnerActIdOf(val){ return String(val == null ? "" : val).split("·")[0].trim(); }
+// PURE. Deux entrées disent-elles la même chose ? L'entrée d'un appel repasse par la frontière ; une clé de trop la fait lever.
+function runnerActSame(spec, got, want){
+  try{ return JSON.stringify(spec.clean(got)) === JSON.stringify(want); }catch(e){ return false; }
+}
+function runnerActions(){
+  const j = runnerRead("actions.json", {});
+  return { items: (Array.isArray(j.items) ? j.items : []).filter(x => x && RUNNER_ACT_ID_RE.test(String(x.id || "")) && runnerActKind(x.kind) && x.file && x.card && x.input && typeof x.input === "object") };
+}
+// PURE. Ce que la passe d'action reçoit : l'entrée EXACTE. Elle ne quitte pas ce Mac.
+function runnerActionPrompt(item){
+  const spec = RUNNER_ACTIONS[item.kind], tail = spec.tool.split("__").pop();
+  return "You are TabTree's Mac runner. The user approved, in TabTree, ONE action: " + spec.what + ". Nobody watches this conversation.\n"
+    + "Your only tool is " + tail + " (" + spec.tool + "): load it with tool search first.\n"
+    + "1. Call it ONCE with exactly this input — change, add or drop nothing:\n" + JSON.stringify(item.input) + "\n"
+    + "2. Never call any other tool, and never call it twice: a guard refuses anything else.\n"
+    + "End with one line: DONE, or NOT DONE: <why>.";
+}
+// PURE. LA DÉCISION DU GARDE, une table. `allow` laisse passer ; tout le reste dit pourquoi non.
+function runnerGateDecide(item, tool, input){
+  if(tool === "ToolSearch") return { allow: true, mark: false };
+  const spec = item ? runnerActKind(item.kind) : null;
+  if(!spec) return { allow: false, why: "no approved action is known for this pass" };
+  if(tool !== spec.tool) return { allow: false, why: "only " + spec.tool + " may be called in this pass" };
+  if(item.done || item.fired) return { allow: false, why: "the approved action was already carried out once; it never runs twice" };
+  if(!runnerActSame(spec, input, item.input)) return { allow: false, why: "the input differs from what the user approved in TabTree. Call it with exactly the approved input, or stop" };
+  return { allow: true, mark: true };
+}
+// Le garde lui-même : `claude` l'appelle AVANT chaque outil (hook PreToolUse), l'appel sur l'entrée standard. Sortie 2 = refusé.
+function runnerGateMain(id){
+  let raw = "";
+  const deny = why => { process.stderr.write("TabTree guard: " + why + ".\n"); process.exit(2); };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", d => { if(raw.length < 2e6) raw += d; });
+  process.stdin.on("end", () => {
+    let j = null; try{ j = JSON.parse(raw); }catch(e){}
+    if(!j || typeof j.tool_name !== "string") return deny("the tool call could not be read");
+    const box = runnerActions(), item = box.items.find(x => x.id === id) || null;
+    const d = runnerGateDecide(item, j.tool_name, j.tool_input);
+    if(!d.allow) return deny(d.why);
+    if(d.mark){
+      // ⚠️ AVANT de laisser passer : si cette écriture échoue, on ne peut plus garantir « une seule fois » — donc on refuse.
+      item.fired = new Date().toISOString();
+      try{ runnerWrite("actions.json", { items: box.items }); if(!(runnerActions().items.find(x => x.id === id) || {}).fired) throw 0; }
+      catch(e){ return deny("the guard could not record the call, so it was not allowed"); }
+    }
+    process.exit(0);
+  });
+}
+function runnerShQ(s){ return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+// Le fichier de réglages de LA passe d'une action : un hook sur TOUS les outils, qui appelle le garde avec l'id.
+function runnerGateSettings(id){
+  const copy = join(runnerDir(), "tabtree-mcp.mjs");
+  const self = existsSync(copy) ? copy : fileURLToPath(import.meta.url);
+  const conf = { hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: runnerShQ(process.execPath) + " " + runnerShQ(self) + " --runner-gate " + id }] }] } };
+  const file = join(runnerDir(), "gate-" + id + ".json");
+  mkdirSync(runnerDir(), { recursive: true }); writeFileSync(file, JSON.stringify(conf, null, 2) + "\n");
+  return file;
+}
+
+// ---------------------------------------------------------------------------
 // 📁 UN DOSSIER PAR CARTE, et 👀 LE LIVRABLE QUI S'OUVRE (1.37.0, 2026-11-15)
 // ---------------------------------------------------------------------------
 // Demande du propriétaire : le coffre (YG-OS) pour le travail, MAIS chaque projet logiciel a son dépôt — une carte de code doit
@@ -7509,20 +7723,24 @@ function runnerCalled(f, tail, ok){
 }
 // PURE. Où en est un courriel : `sent` (déjà marqué), `accepted` (l'attribut est appliqué sur l'entrée), `waiting` (la livraison
 // attend encore la revue), `gone` (ni l'un ni l'autre : rejetée, ou appliquée mais pas encore relue — d'où plusieurs passages).
-function runnerOutboxState(item, doc, pending){
+function runnerOutboxState(item, doc, pending){ return runnerHeldState(RUNNER_EMAIL_ATTR, RUNNER_SENT_ATTR, item.draft, doc, pending); }
+// PURE. La même lecture pour tout ce qui attend un accord : l'attribut `name` (dont la valeur commence par `id`) sur une entrée 📄,
+// la marque `doneName` à côté. Un attribut posé ailleurs que sur une entrée 📄 ne compte pas : accepter une LIVRAISON est le geste.
+function runnerHeldState(name, doneName, id, doc, pending){
+  const key = String(name).toLowerCase(), doneKey = String(doneName).toLowerCase();
   let found = null;
   (function walk(n, g){
     if(found || !n || g > 200) return;
-    const a = attrsOf(n).find(x => x.name.toLowerCase() === RUNNER_EMAIL_ATTR.toLowerCase() && runnerEmailIdOf(x.val) === item.draft);
+    const a = attrsOf(n).find(x => x.name.toLowerCase() === key && runnerEmailIdOf(x.val) === id);
     if(a && /^📄 /.test(String(n.text || ""))) found = n;
     (n.children || []).forEach(c => walk(c, g + 1));
   })(doc && doc.root, 0);
   if(found){
-    const sent = attrsOf(found).some(x => x.name.toLowerCase() === RUNNER_SENT_ATTR.toLowerCase());
+    const sent = attrsOf(found).some(x => x.name.toLowerCase() === doneKey);
     return { state: sent ? "sent" : "accepted", entry: found };
   }
   const wait = (pending || []).some(p => (p && p.ops || []).some(op => op && op.op === "attr"
-    && String(op.name || "").toLowerCase() === RUNNER_EMAIL_ATTR.toLowerCase() && runnerEmailIdOf(op.value) === item.draft));
+    && String(op.name || "").toLowerCase() === key && runnerEmailIdOf(op.value) === id));
   return { state: wait ? "waiting" : "gone", entry: null };
 }
 // PURE. Les textes que `claude -p` reçoit. La carte n'est jamais copiée ici : la passe la relit par card_prompt, qui la
@@ -7539,7 +7757,9 @@ function runnerCardPrompt(file, card, folder, git){
     + "2. Do the work it describes, from this folder (" + folder + "), following this folder's own rules (CLAUDE.md) and skills when they apply.\n"
     + rules
     + "3. Never send, publish, post, sign, pay, accept, share or delete anything on the user's behalf. When the card asks for an e-mail, "
-    + "write it as a Gmail draft (create_draft, with its attachments) and never send it.\n"
+    + "write it as a Gmail draft (create_draft, with its attachments) and never send it. "
+    + "When it asks for " + Object.keys(RUNNER_ACTIONS).map(k => RUNNER_ACTIONS[k].help).join("; or ") + ". You cannot do it yourself: "
+    + "the user approves it in TabTree, and only then does this Mac carry out exactly that input, once.\n"
     + "4. When the deliverable is a file in this folder or a web page, first set the card's “" + KB_TEST_ATTR + "” attribute (propose_changes on the same file: op attr, target = the card's exact title, name "
     + JSON.stringify(KB_TEST_ATTR) + ") to \"<the file's path relative to this folder, or its https:// address> · <what to check>\": the user's Mac opens it once you have delivered.\n"
     + "5. Deliver ONCE with deliver_card (file " + JSON.stringify(String(file)) + ", card " + JSON.stringify(String(card)) + ", result = the deliverable in Markdown). "
@@ -7667,6 +7887,85 @@ async function runnerOutboxPass(cfg, out, log, slow){
   const after = runnerOutbox();   // relu : une passe de carte a pu ajouter un brouillon pendant l'envoi
   const known = new Set(box.items.map(x => x.draft));
   runnerWrite("outbox.json", { items: keep.concat(after.items.filter(x => !known.has(x.draft))) });
+}
+
+// ⏳ L'ACTION. Une action acceptée part par une passe à UN outil, derrière le garde ; puis le tableau le dit sans clic.
+async function runnerActionsPass(cfg, out, log, slow){
+  const box = runnerActions();
+  if(!box.items.length) return;
+  const keep = [], boards = {}, now = Date.now();
+  const say = async (m, it, text) => {
+    try{ const card = cpFindCard(m.doc, it.card);
+      await writeProposal(m, RUNNER_ACTIONS[it.kind].ico + " About the action you approved", buildProposalOps(m.doc, [{ op: "comment", target: card.path, text }]), { extra: { via: "plugin" } }); }catch(e){}
+  };
+  for(const it of box.items){
+    const spec = RUNNER_ACTIONS[it.kind];
+    if(it.done || (now - (Date.parse(it.at) || 0)) > RUNNER_OUTBOX_DAYS * 86400000 || (it.tries || 0) >= RUNNER_SEND_TRIES){
+      if(!it.done) log(spec.ico + " dropped " + it.line + " (" + ((it.tries || 0) >= RUNNER_SEND_TRIES ? "failed " + it.tries + " times" : "no approval within " + RUNNER_OUTBOX_DAYS + " days") + ")");
+      continue;
+    }
+    let m;
+    try{ m = boards[it.file] || (boards[it.file] = await ttOpenBoard(it.file)); }catch(e){ keep.push(it); continue; }
+    if(!m){ if(slow) it.gone = (it.gone || 0) + 1; if((it.gone || 0) < RUNNER_GONE_TICKS) keep.push(it); continue; }
+    const st = runnerHeldState(RUNNER_ACT_ATTR, RUNNER_ACT_DONE_ATTR, it.id, m.doc, await ttPendingOf(m));
+    if(st.state === "waiting"){ it.gone = 0; keep.push(it); continue; }
+    if(st.state === "gone"){
+      if(slow) it.gone = (it.gone || 0) + 1;
+      if((it.gone || 0) < RUNNER_GONE_TICKS) keep.push(it); else log(spec.ico + " not " + spec.undone + " " + it.line + ": the delivery was rejected");
+      continue;
+    }
+    if(st.state === "sent") continue;
+    // Acceptée. ⚠️ Un appel déjà laissé passer par le garde (une passe morte ensuite) ne se rejoue JAMAIS.
+    const unsure = async () => {
+      log(spec.ico + " ? " + it.line + ": the call was let through but its result was not seen — not run again");
+      out.errors.push({ action: it.id, error: "result not seen" });
+      await say(m, it, spec.ico + " The Mac runner started " + spec.what + " after your approval, but could not confirm it: " + it.line + ". Check it there — the runner will not try again, so nothing is ever done twice.");
+    };
+    if(it.fired){ await unsure(); continue; }
+    if(spec.stale && spec.stale(it.input, now)){
+      log(spec.ico + " not " + spec.undone + " " + it.line + ": its time has passed");
+      await say(m, it, spec.ico + " Not " + spec.undone + ": " + it.line + " — it was approved after its time had passed.");
+      continue;
+    }
+    let gate = "";
+    try{ gate = runnerGateSettings(it.id); }catch(e){ keep.push(it); log("! " + spec.ico + " the guard file could not be written: " + projLine(e && e.message || e, 160)); continue; }
+    const r = await runnerSpawn(cfg, ["-p", runnerActionPrompt(it), "--permission-mode", "dontAsk", "--tools", "ToolSearch",
+      "--allowedTools", spec.tool, "--disallowedTools", spec.deny.join(","), "--settings", gate, "--output-format", "stream-json", "--verbose"], cfg.folder || homedir(), RUNNER_ACT_MS);
+    try{ rmSync(gate, { force: true }); }catch(e){}
+    const f = runnerStreamFacts(r.out);
+    const good = f.calls.filter(c => c.name === spec.tool && f.results[c.id] && !f.results[c.id].error);
+    const done = good.some(c => runnerActSame(spec, c.input, it.input));
+    const stray = good.filter(c => !runnerActSame(spec, c.input, it.input));
+    const fired = !!(runnerActions().items.find(x => x.id === it.id) || {}).fired;   // relu : c'est le garde qui l'écrit
+    if(stray.length){
+      log("⚠ " + spec.ico + " a pass ran " + spec.tool + " with another input than the approved one — the guard did not stop it; check there");
+      await say(m, it, "⚠ " + spec.ico + " The Mac runner's pass did something else than what you approved (" + it.line + "). Check it there.");
+    }
+    if(!done){
+      if(fired){ it.fired = true; await unsure(); continue; }
+      it.tries = (it.tries || 0) + 1;
+      it.error = projLine((/NOT DONE:\s*(.*)$/m.exec(f.final) || [])[1] || r.err || "the tool was not called", 200);
+      log(spec.ico + " ✗ " + it.line + ": " + it.error);
+      if(it.tries >= RUNNER_SEND_TRIES) await say(m, it, spec.ico + " The Mac runner could not finish " + spec.what + " after " + it.tries + " tries (" + it.error + "): " + it.line + ". Nothing was " + spec.undone + ".");
+      else keep.push(it);
+      out.errors.push({ action: it.id, error: it.error });
+      continue;
+    }
+    if(!fired) log("⚠ " + spec.ico + " the guard did not run for this pass (hooks off?) — the call was checked after the fact only");
+    it.done = runnerStamp();
+    out.acted.push(it.id);
+    log(spec.ico + " " + spec.undone + " " + it.line);
+    runnerNotify("TabTree", spec.ico + " " + spec.done + ": " + it.line);
+    try{
+      const card = cpFindCard(m.doc, it.card), entry = cpFindCard(m.doc, st.entry.id);
+      await writeProposal(m, spec.ico + " " + spec.done + " after your approval", buildProposalOps(m.doc, [
+        { op: "attr", target: entry.path, name: RUNNER_ACT_DONE_ATTR, value: it.done },
+        { op: "comment", target: card.path, text: spec.ico + " " + spec.done + " " + it.line + " after your approval (" + it.done + ")." } ]), { extra: { via: "plugin" } });
+    }catch(e){ log(spec.ico + " " + spec.undone + ", but the card could not be marked: " + projLine(e && e.message || e, 160)); }
+  }
+  const after = runnerActions();   // relu : une passe de carte a pu proposer une action pendant celle-ci
+  const known = new Set(box.items.map(x => x.id));
+  runnerWrite("actions.json", { items: keep.concat(after.items.filter(x => !known.has(x.id))) });
 }
 
 // LES CARTES. Les tableaux qui ont bougé (ou qui ont encore une carte de Claude au changement de jour, ou du travail laissé
@@ -7853,13 +8152,14 @@ async function runnerTick(log){
   if(!cfg.on) return { on: false };
   if(!CLOUD || !API_KEY_OK) return { on: true, error: "no connector key — run /tabtree:runner on again" };
   const tick = runnerRead("tick.json", {}), forced = existsSync(join(runnerDir(), "now"));
-  const plan = runnerTickPlan({ last: tick.cards, now: Date.now(), forced, pending: runnerOutbox().items.filter(x => !x.sent).length });
+  const plan = runnerTickPlan({ last: tick.cards, now: Date.now(), forced, pending: runnerOutbox().items.filter(x => !x.sent).length + runnerActions().items.filter(x => !x.done).length });
   if(!plan.outbox && !plan.cards) return { on: true, idle: true };
   if(!runnerLock()) return { on: true, lock: false };
-  const out = { on: true, lock: true, sent: [], ran: [], opened: [], waiting: [], errors: [] };
+  const out = { on: true, lock: true, sent: [], acted: [], ran: [], opened: [], waiting: [], errors: [] };
   try{
     runnerSelfUpdate(log);
     if(plan.outbox) try{ await runnerOutboxPass(cfg, out, log, plan.cards); }catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! outbox: " + projLine(e && e.message || e, 200)); }
+    if(plan.outbox) try{ await runnerActionsPass(cfg, out, log, plan.cards); }catch(e){ out.errors.push({ error: projLine(e && e.message || e, 200) }); log("! actions: " + projLine(e && e.message || e, 200)); }
     if(plan.cards){
       try{ rmSync(join(runnerDir(), "now"), { force: true }); }catch(e){}
       runnerWrite("tick.json", { cards: Date.now() });
@@ -8242,9 +8542,10 @@ async function runnerTool(a){
     if(!runnerNoLaunchd()) try{ execFileSync("/usr/bin/security", ["delete-generic-password", "-s", RUNNER_KC, "-a", "runner"], { stdio: "ignore", timeout: 8000 }); }catch(e){}
     runnerWrite("config.json", Object.assign({}, cfg, { on: false }));
     await runnerAccountBeat(false, cfg);
-    const pend = runnerOutbox().items.filter(x => !x.sent).length;
+    const pend = runnerOutbox().items.filter(x => !x.sent).length, held = runnerActions().items.filter(x => !x.done).length;
     return "⏹ The Mac runner is off. No card will start on this Mac, and no approved draft will be sent from it."
-      + (pend ? "\n" + pend + " e-mail draft(s) were still waiting for your approval: they stay in Gmail — send them from there." : "");
+      + (pend ? "\n" + pend + " e-mail draft(s) were still waiting for your approval: they stay in Gmail — send them from there." : "")
+      + (held ? "\n" + held + " held action(s) (calendar events…) were still waiting: nothing will carry them out — do them by hand, from the card's deliverable." : "");
   }
   // 📁 LE REGISTRE DES DÉPÔTS (1.37.0) : local à ce Mac, sans clé ni réseau. C'est le SEUL endroit où un chemin devient un dossier
   // de travail — par le geste du propriétaire du Mac, jamais par une carte.
@@ -8320,7 +8621,7 @@ async function runnerTool(a){
     return "✅ The Mac runner is on. Every 10 minutes, while this Mac is awake and you are logged in, it looks at your TabTree boards.\n"
       + "• It takes a card given to an agent (agent:claude, or one of the space's agents with its own model and daily cap) that is ready — in a To-do column, or with an “Agent run” date that is due.\n"
       + "• Claude does the work from " + folder + ", with your connectors (Gmail, Drive, Calendar), and delivers it on the card for your review.\n"
-      + "• It never sends, publishes, signs or pays. An e-mail becomes a Gmail draft; when you Accept it in TabTree, the runner sends exactly that draft, about a minute later.\n"
+      + "• It never sends, publishes, signs or pays. An e-mail becomes a Gmail draft; when you Accept it in TabTree, the runner sends exactly that draft, about a minute later. A calendar event is proposed on the card; when you Accept it, the runner creates exactly that event, once.\n"
       + "• A code card runs only in a repository you registered (/tabtree:runner repo_add <folder>), on a branch of its own, never pushed" + (cfg.repos.length ? " — " + cfg.repos.length + " registered" : " — none registered yet, so code cards are left alone") + ".\n"
       + "• At most " + RUNNER_PER_TICK + " cards per pass and " + perDay + " per day. You get a Mac notification when something is ready"
       + (open ? ", and the card's “" + KB_TEST_ATTR + "” target (an https page, or a document inside the folder) opens on this Mac (open off stops that).\n\n" : ". Nothing is opened by itself (open on changes that).\n\n")
@@ -8338,7 +8639,7 @@ async function runnerTool(a){
   try{ tail = readFileSync(join(runnerDir(), "runner.log"), "utf8").trim().split("\n").slice(-10); }catch(e){}
   const out = [cfg.on ? "🟢 The Mac runner is on — working from " + cfg.folder + ", " + cfg.perDay + " cards a day at most." : "⚪ The Mac runner is off. Turn it on: /tabtree:runner on <folder>."];
   if(cfg.on){
-    out.push("Today: " + (st.day.date === agentRunToday() ? st.day.n : 0) + " card(s) run. E-mail drafts waiting for your approval: " + box.filter(x => !x.sent).length + ".");
+    out.push("Today: " + (st.day.date === agentRunToday() ? st.day.n : 0) + " card(s) run. E-mail drafts waiting for your approval: " + box.filter(x => !x.sent).length + ". Held actions (calendar events…) waiting: " + runnerActions().items.filter(x => !x.done).length + ".");
     out.push("After a delivery, the card's “" + KB_TEST_ATTR + "” target " + (cfg.open ? "opens on this Mac (an https page, or a document inside the folder the pass ran from)." : "is not opened (turn it on: /tabtree:runner on, open on)."));
     try{ out.push("", runnerPreviewText(await runnerPreview(cfg))); }catch(e){ out.push("(Could not read your boards: " + projLine(e && e.message || e, 160) + ")"); }
   }
@@ -8354,6 +8655,7 @@ else if(TT_MODE === "--plugin") ttPlugin(process.argv.slice(3));
 else if(TT_MODE === "--hook") ttHook(process.argv[3]);
 else if(TT_MODE === "--watch") ttWatchMain(process.argv.includes("--once"));
 else if(TT_MODE === "--runner-tick") runnerTickMain();
+else if(TT_MODE === "--runner-gate") runnerGateMain(String(process.argv[3] || ""));
 else {
   ttWatchEmbed();
   let buf = "";
