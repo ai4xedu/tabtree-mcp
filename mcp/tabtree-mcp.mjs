@@ -1196,7 +1196,7 @@ const ICOS_MCP = ["", "chip", "big"];
 // un format connu du seul connecteur serait effacé par `okFormat` à l'ouverture, et la carte
 // s'ouvrirait en carte ordinaire sans un mot. 🗂 `projet` (2026-10-26) en est un : la vision à la
 // racine, les objectifs à jauge, les epics comme des paris — voir `projRoles` plus bas.
-const FORMATS_MCP = ["okr", "pv", "org", "radial", "tree", "outline", "oneside", "timeline", "suivi", "projet"];
+const FORMATS_MCP = ["okr", "pv", "org", "radial", "tree", "trellis", "outline", "oneside", "timeline", "suivi", "projet"];
 function okFormatMcp(f, where){
   if(f == null || f === "") return "";
   if(typeof f !== "string" || !FORMATS_MCP.includes(f))
@@ -4656,15 +4656,37 @@ function depsBlocking(n, byId){
   for(const id of depsOf(n)){ const p = byId.get(id); if(p && p.check !== true) out.push(p); }
   return out;
 }
+// 🗺→📋 1.40.0 — LE NOM COMPOSÉ DANS LES RAPPORTS (lot 4 « de l'arbre au kanban », 2026-11-23). COPIE, mot pour mot, de l'app
+// (src/js/3070-kanban-journal-and-dashboard.js ; le test la compare avec les autres déclarations de board_numbers) : une carte se nomme
+// par son texte ET ses ancêtres sous le cadre — « E-learning — Onboarding › Academy » —, comme le recto de l'app. Bornée ; un nœud de
+// premier niveau garde son texte seul. Ce qui bloque, le Flow, la prévision, les cartes des agents et le stand-up la lisent.
+const KB_NAME_OWN_MAX = 120, KB_NAME_ANC_MAX = 40, KB_NAME_PATH_MAX = 100;
+function kbFullNames(r){
+  const out = new Map();
+  (function w(n, anc, depth){
+    if(!n || typeof n !== "object" || depth > 60) return;
+    const own = String(n.text || "").slice(0, KB_NAME_OWN_MAX);
+    if(n !== r){
+      const path = anc.slice();
+      let cut = false;
+      while(path.length > 1 && path.join(" › ").length > KB_NAME_PATH_MAX){ path.shift(); cut = true; }
+      out.set(n, path.length ? (own.trim() || "Untitled") + " — " + (cut ? "… › " : "") + path.join(" › ") : own);
+    }
+    const below = n === r ? anc : anc.concat((String(n.text || "").trim() || "Untitled").slice(0, KB_NAME_ANC_MAX));
+    for(const c of (Array.isArray(n.children) ? n.children : [])) w(c, below, depth + 1);
+  })(r, [], 0);
+  return out;
+}
 function kbBlocked(r, cols){
-  const colIds = new Set((cols || []).map(c => c.id)), byId = nodeIndex(r), out = [];
+  const colIds = new Set((cols || []).map(c => c.id)), byId = nodeIndex(r), out = [], names = kbFullNames(r);
+  const nm = n => names.get(n) || String(n.text || "").slice(0, 120);   // 🗺→📋 le nom composé, pour la carte ET pour celle qu'elle attend
   (function w(n){
     if(n !== r && n.col && colIds.has(n.col) && n.check !== true){
-      const txt = String(n.text || "").slice(0, 120), who = String(n.assign || "");
+      const txt = nm(n), who = String(n.assign || "");
       if(n.stat === "block") out.push([n.id, txt, who, "block", ""]);
       else {
         const wait = depsBlocking(n, byId);
-        if(wait.length) out.push([n.id, txt, who, "waits", String(wait[0].text || "").slice(0, 120)]);
+        if(wait.length) out.push([n.id, txt, who, "waits", nm(wait[0])]);
       }
     }
     n.children.forEach(w);
@@ -4674,12 +4696,12 @@ function kbBlocked(r, cols){
 function kbAgentCards(r, cols, log, since){
   const colById = new Map((cols || []).map(c => [c.id, c])), ticked = new Set();
   for(const e of (log || [])) if(e[3] && e[0] > since) ticked.add(e[1]);
-  const carrying = [], done = [];
+  const carrying = [], done = [], names = kbFullNames(r);   // 🗺→📋 le nom composé
   (function w(n){
     if(n !== r && n.col && colById.has(n.col)){
       const ag = assignList(n.assign || "").map(agentOf).find(Boolean);
       if(ag){
-        const txt = String(n.text || "").slice(0, 120);
+        const txt = names.get(n) || String(n.text || "").slice(0, 120);
         if(n.check === true){ if(ticked.has(n.id)) done.push([n.id, txt, ag]); }
         else carrying.push([n.id, txt, colById.get(n.col).name || "", ag]);
       }
@@ -4735,7 +4757,7 @@ function kbFlow(r, cols, log, now, tagNames){
   }
   const p50 = kbPct(cycles, 0.5), p85 = kbPct(cycles, 0.85);
   // ── L'âge du travail EN COURS : depuis la dernière entrée dans le travail (une colonne de travail après autre chose).
-  const aging = [];
+  const aging = [], names = kbFullNames(r);   // 🗺→📋 le nom composé
   for(const n of cards){
     if(!n.col || !started.has(n.col) || n.check === true) continue;
     const es = idx.get(n.id) || [];
@@ -4745,7 +4767,7 @@ function kbFlow(r, cols, log, now, tagNames){
       since = es[i][0];
     }
     if(since == null) continue;   // jamais vu entrer dans le travail : on ne devine pas son âge
-    aging.push([n.id, String(n.text || "").slice(0, 120), n.col, Math.max(0, now - since), String(n.assign || "")]);
+    aging.push([n.id, names.get(n) || String(n.text || "").slice(0, 120), n.col, Math.max(0, now - since), String(n.assign || "")]);
   }
   aging.sort((a, b) => b[3] - a[3]);
   // ── La plage : huit semaines glissantes, la meilleure et la plus lente non nulle.
@@ -4800,7 +4822,7 @@ function dateAddDays(v, n){
   return t.toISOString().slice(0, 10);
 }
 function kbForecast(r, cols, log, now, today){
-  const colById = new Map((cols || []).map(c => [c.id, c]));
+  const colById = new Map((cols || []).map(c => [c.id, c])), names = kbFullNames(r);   // 🗺→📋 le nom composé
   const rank = new Map((cols || []).map((c, i) => [c.id, i]));
   let first = null;
   for(const e of (log || [])) if(e[0] <= now && (first == null || e[0] < first)) first = e[0];
@@ -4829,7 +4851,7 @@ function kbForecast(r, cols, log, now, today){
   out.date = dateAddDays(today, Math.ceil(open.length / med * 7));
   open.forEach((n, i) => {
     const likely = dateAddDays(today, Math.ceil((i + 1) / med * 7));
-    if(n.due && n.due < likely) out.atRisk.push([n.id, String(n.text || "").slice(0, 120), String(n.assign || ""), n.due, likely]);
+    if(n.due && n.due < likely) out.atRisk.push([n.id, names.get(n) || String(n.text || "").slice(0, 120), String(n.assign || ""), n.due, likely]);
   });
   return out;
 }
@@ -4850,7 +4872,8 @@ function kbStandup(r, cols, log, since, now, stuckS){
   const colById = new Map((cols || []).map(c => [c.id, c]));
   const started = kbStartedCols(cols);
   const nom = id => (colById.get(id) || {}).name || "";
-  const txt = n => String(n.text || "").slice(0, 120);
+  const names = kbFullNames(r);   // 🗺→📋 le nom composé : « E-learning — Onboarding › Academy », jamais le texte seul d'une carte rangée sous une branche
+  const txt = n => names.get(n) || String(n.text || "").slice(0, 120);
   const today = new Date(now * 1000).toISOString().slice(0, 10);
   const dayNum = s => Math.floor(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 86400000);
   const parCarte = new Map();
@@ -5075,6 +5098,9 @@ function dispatchPick(doc, pending, agents){
   const byId = new Map(cols.map(c => [c.id, c]));
   const doing = cols.find(c => !c.done && kbColKin(c.name) === 1) || null;
   const picks = [], skipped = [];
+  // 🗺→📋 1.40.0 — la carte se nomme comme sur le tableau, par son texte ET ses parents (`kbFullNames`) : « Spec — Onboarding › Academy »
+  // et « Spec — Billing » ne sont plus deux « Spec ». L'id reste la seule poignée ; ce nom est pour celui qui lit la liste.
+  const names = kbFullNames(doc && doc.root && typeof doc.root === "object" ? doc.root : {});
   let ord = 0;
   const walk = (n, top)=>{
     if(!n || typeof n !== "object") return;
@@ -5082,7 +5108,7 @@ function dispatchPick(doc, pending, agents){
     if(c && n.check !== true && !c.done){
       const people = assignList(n.assign), ag = agentCardRuns(n.assign, agents ? [...agents.keys()] : []);
       if(ag){
-        const text = projLine(n.text, 120) || "(untitled card)";
+        const text = projLine(names.get(n) || n.text, 240) || "(untitled card)";
         const ses = kbSessionParse((attrsOf(n).find(x => x.name.toLowerCase() === KB_SESSION_ATTR.toLowerCase()) || {}).val);
         const why = ses && !ses.archived ? "session"
           : dispatchPendingHits(n, pending) ? "pending"
@@ -5181,7 +5207,7 @@ const TOOLS = [
       + "Writes a .tabtree file into the backup folder; the user pulls it into the app from the 🛟 menu.",
     inputSchema: { type:"object", properties:{
       name:{ type:"string", description:"Name of the map" },
-      format:{ type:"string", enum: FORMATS_MCP, description:"Optional living format — projet (a project: vision, objectives, epics as bets, cards, sprints — see the shape above), okr, pv (meeting minutes), org (org chart), radial, tree (drawn as a real tree), outline, oneside, timeline, suivi (tracking). Omit for a plain mind map. The user can change it later; Cmd+Z undoes it." },
+      format:{ type:"string", enum: FORMATS_MCP, description:"Optional living format — projet (a project: vision, objectives, epics as bets, cards, sprints — see the shape above), okr, pv (meeting minutes), org (org chart), radial, tree (drawn as a real tree), trellis (a ROADMAP: each main branch runs along its own wire and its cards hang at their due date — a bud is planned, a blossom is in progress, a fruit is done; undated cards hang after the last month), outline, oneside, timeline, suivi (tracking). Omit for a plain mind map. The user can change it later; Cmd+Z undoes it." },
       columns:{ type:"array", description:"Optional kanban columns, left to right — the cards then live on a board too (the same tree, another view). Give each an `id` and end a card's line with \" @<id>\" to place it (\"- [ ] F01 · Instrument the funnel @todo\"); mark ONE column done:true (a card placed there is ticked). In format projet, an epic's card without a marker goes to the first column. 12 max.", items:{ type:"object", properties:{
         id:{ type:"string", description:"Short id used by the \" @<id>\" line marker, e.g. backlog, todo, doing, done (letters, digits, - or _)" },
         name:{ type:"string" }, done:{ type:"boolean" }, wip:{ type:"integer", description:"Optional work-in-progress limit 1–99" }
@@ -5414,7 +5440,7 @@ const TOOLS = [
         // Claude envoyait "true", que le contrôle d'un check refuse.
         value:{ type:["boolean","string"], description:"check: true to tick, false to untick. star: false to remove the star (true by default). attr: its value as text, e.g. \"2h\" (\"\" removes the attribute)" },
         est:{ type:"string", description:"est: the estimate as a duration — \"2h\", \"1h30\", \"45\" (minutes), \"2:15\" — or \"\" to remove it" },
-        format:{ type:"string", enum: [""].concat(FORMATS_MCP), description:"format: the map's living format — projet, okr, pv, org, radial, tree, outline, oneside, timeline, suivi — or \"\" for a plain mind map" }
+        format:{ type:"string", enum: [""].concat(FORMATS_MCP), description:"format: the map's living format — projet, okr, pv, org, radial, tree, trellis (a roadmap along time), outline, oneside, timeline, suivi — or \"\" for a plain mind map" }
       }, required:["op"], additionalProperties:false } }
     }, required:["file","changes"], additionalProperties:false }
   },
@@ -6377,7 +6403,7 @@ function handle(msg, out = send){
       // déjà dérivé (1.0.0 ici, 1.1.0 dans le manifeste) sans que rien ne le
       // signale : un client affiche l'une, le registre publie l'autre. Un
       // autotest les compare désormais toutes les quatre.
-      serverInfo: { name: "tabtree", version: "1.39.0" }
+      serverInfo: { name: "tabtree", version: "1.40.0" }
     });
   } else if(method === "notifications/initialized" || (method||"").startsWith("notifications/")){
     // notification : pas de réponse
